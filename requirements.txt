@@ -1,0 +1,8 @@
+streamlit>=1.40
+pandas>=2.0
+numpy
+openpyxl
+plotly
+pdfplumber
+python-pptx
+requests
