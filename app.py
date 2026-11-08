@@ -1,4 +1,3 @@
-```python
 """AI Business Analytics, Messy Data Auto-Cleaner & Credit Recovery Studio.
 Run locally: streamlit run app.py
 """
@@ -1100,4 +1099,3 @@ else:
                     file_name="Credit_Recovery_Report.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 )
-```
