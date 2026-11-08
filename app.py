@@ -1,10 +1,9 @@
-"""Credit Recovery Intelligence - vehicle installment (EMI) portfolio.
-Run:  streamlit run app.py
+```python
+"""AI Business Analytics, Messy Data Auto-Cleaner & Credit Recovery Studio.
+Run locally: streamlit run app.py
 """
 import hmac
 import io
-import itertools
-import json
 import math
 import os
 import re
@@ -26,1406 +25,1079 @@ from pptx.enum.shapes import MSO_SHAPE
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
-warnings.filterwarnings("ignore", message="Could not infer format")
-st.set_page_config(page_title="Credit Recovery Intelligence", page_icon="💳", layout="wide")
+warnings.filterwarnings("ignore")
+st.set_page_config(
+    page_title="AI Analytics & Credit Intelligence Studio",
+    page_icon="🚀",
+    layout="wide",
+)
+
+st.markdown(
+    """
+    <style>
+    .block-container {padding-top: 1.2rem; padding-bottom: 2rem;}
+    .hero-box {
+        padding: 1.3rem 1.6rem; border-radius: 12px; color: white;
+        margin-bottom: 1rem; box-shadow: 0 4px 14px rgba(0,0,0,0.08);
+    }
+    .kpi-card {
+        background: #FFFFFF; border: 1px solid #E2E8F0; border-radius: 10px;
+        padding: 0.9rem 1rem; box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+        margin-bottom: 0.5rem;
+    }
+    .kpi-title {font-size: 0.78rem; color: #64748B; text-transform: uppercase; font-weight: 600;}
+    .kpi-val {font-size: 1.35rem; color: #0F172A; font-weight: 700; margin-top: 0.2rem;}
+    .kpi-sub {font-size: 0.75rem; color: #475569; margin-top: 0.15rem;}
+    .insight-box {
+        background: #F8FAFC; border-left: 4px solid #2563EB;
+        padding: 0.85rem 1rem; border-radius: 6px; margin-bottom: 0.6rem;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
-# ======================================================================
-# Secrets / access control
-# ======================================================================
-def get_secret(name, default=None):
-    """Read from Streamlit secrets, then environment variables. Never hard-code keys."""
+def get_secret(key: str, default: str = "") -> str:
     try:
-        if name in st.secrets:
-            return st.secrets[name]
+        if key in st.secrets:
+            return str(st.secrets[key])
     except Exception:
         pass
-    return os.environ.get(name, default)
+    return os.environ.get(key, default)
 
 
-_pw = get_secret("APP_PASSWORD")
-if _pw:
+def check_password() -> bool:
+    pw = get_secret("APP_PASSWORD", "").strip()
+    if not pw:
+        return True
+    if st.session_state.get("auth_ok"):
+        return True
+    st.sidebar.markdown("### 🔒 Access Verification")
     entered = st.sidebar.text_input("Password", type="password")
-    if not hmac.compare_digest(entered.encode(), str(_pw).encode()):
-        st.warning("Enter the password to continue.")
-        st.stop()
-
-# ======================================================================
-# Configuration
-# ======================================================================
-FIELDS = {
-    "serial": "Serial Number", "customer": "Customer Name", "branch": "Branch Name",
-    "sales_person": "Sales Personnel", "account": "Account Id", "collector": "Collection Personnel",
-    "vehicle": "Vehicle registration number", "vehicle_model": "Vehicle Model",
-    "sales_price": "Sales price", "down_payment": "Down Payment", "interest": "Interest",
-    "bill_amount": "Bill amount", "balance_receivable": "Balance receivable",
-    "no_emi": "No of EMI", "emi_date": "EMI Date", "emi": "EMI",
-    "inst_due_no": "Installment due number", "emi_coll_no": "EMI Collection number",
-    "due_emi_no": "Due EMI Number", "total_due": "Total due amount",
-    "total_coll": "Total Collection", "overdue_amt": "Overdue amount",
-    "last_month_coll": "Last month collection", "net_balance": "Net balance",
-}
-TEXT_FIELDS = ["serial", "customer", "branch", "sales_person", "account", "collector",
-               "vehicle", "vehicle_model"]
-NUM_FIELDS = [k for k in FIELDS if k not in TEXT_FIELDS + ["emi_date"]]
-ALIASES = {
-    "inst_due_no": ["instalmentduenumber"],
-    "vehicle": ["vehicleregno", "vehicleregistration", "regno", "vehicleno"],
-    "vehicle_model": ["model", "vehiclemodel", "vehicletype"],
-    "branch": ["branch"], "customer": ["customer"],
-    "account": ["accountno", "accountnumber", "accid"],
-    "sales_person": ["salesperson", "salesman"],
-    "collector": ["collectionperson", "collector"],
-    "total_coll": ["totalcollected"], "last_month_coll": ["lastmonthcollected"],
-}
-NONE = "— none —"
-
-BUCKETS = ["Current", "1 EMI", "2 EMI", "3 EMI", "4–5 EMI", "6+ EMI"]
-RISK = {"Current": "Regular", "1 EMI": "Low risk", "2 EMI": "Medium risk",
-        "3 EMI": "High risk", "4–5 EMI": "High risk", "6+ EMI": "Critical"}
-RISK_ORDER = ["Regular", "Low risk", "Medium risk", "High risk", "Critical"]
-RISK_COLORS = {"Regular": "#4C9F70", "Low risk": "#9BC53D", "Medium risk": "#F2C14E",
-               "High risk": "#E8833A", "Critical": "#C0392B"}
-PROV_GROUPS = ["1 EMI due", "2 EMI due", "3–5 EMI due", "6+ EMI due"]
-PROV_MAP = {"1 EMI": "1 EMI due", "2 EMI": "2 EMI due", "3 EMI": "3–5 EMI due",
-            "4–5 EMI": "3–5 EMI due", "6+ EMI": "6+ EMI due"}
-PROV_DEFAULT = [5.0, 25.0, 50.0, 100.0]
-DRIVER_LABEL = {"overdue": "Overdue amount", "due_emi": "Due EMI count",
-                "down_payment": "Low down payment", "outstanding": "Outstanding balance"}
-FMT = {"outstanding": "{:,.0f}", "total_due": "{:,.0f}", "collected": "{:,.0f}",
-       "overdue": "{:,.0f}", "last_month": "{:,.0f}", "efficiency": "{:.1%}",
-       "overdue_pct": "{:.1%}", "provision": "{:,.0f}", "rate_pct": "{:.1f}%",
-       "overdue_amt": "{:,.0f}", "score": "{:.1f}"}
-
-
-def norm(s):
-    return re.sub(r"[^a-z0-9]", "", str(s).lower())
-
-
-def pct(x, d=1):
-    return "n/a" if x is None or pd.isna(x) else f"{x:.{d}%}"
-
-
-def div(a, b):
-    return a / b if b else np.nan
-
-
-def auto_map(columns):
-    nm = {norm(c): c for c in columns}
-    out = {}
-    for key, label in FIELDS.items():
-        for cand in [norm(label)] + ALIASES.get(key, []):
-            if cand in nm:
-                out[key] = nm[cand]
-                break
-    return out
-
-
-# ======================================================================
-# Loading
-# ======================================================================
-@st.cache_data(show_spinner=False)
-def get_sheets(fb):
-    return pd.ExcelFile(io.BytesIO(fb)).sheet_names
-
-
-@st.cache_data(show_spinner=False)
-def detect_header_row(fb, sheet):
-    """Row (1-based) that contains the most known column names."""
-    raw = pd.read_excel(io.BytesIO(fb), sheet_name=sheet, header=None, nrows=40)
-    known = set()
-    for k, label in FIELDS.items():
-        known.add(norm(label))
-        known.update(ALIASES.get(k, []))
-    best, best_score = 1, 0
-    for i in range(len(raw)):
-        score = sum(norm(v) in known for v in raw.iloc[i].tolist() if pd.notna(v))
-        if score > best_score:
-            best, best_score = i + 1, score
-    return best if best_score >= 3 else 1
-
-
-@st.cache_data(show_spinner=False)
-def load_sheet(fb, sheet, header_row):
-    df = pd.read_excel(io.BytesIO(fb), sheet_name=sheet, header=header_row - 1)
-    df.columns = [str(c).strip() for c in df.columns]
-    df = df.dropna(how="all")
-    junk = [c for c in df.columns if c.startswith("Unnamed") and df[c].isna().all()]
-    return df.drop(columns=junk)
-
-
-# ======================================================================
-# Cleaning (every change is reported; source values are never edited)
-# ======================================================================
-def to_text(s):
-    t = s.astype("string").str.strip().fillna("Unknown").replace("", "Unknown").astype(str)
-    return t.replace({"nan": "Unknown", "None": "Unknown", "NaT": "Unknown"})
-
-
-def to_num(s):
-    blank = s.isna() | (s.astype(str).str.strip() == "")
-    t = (s.astype(str).str.replace(r"[,\s]", "", regex=True)
-         .str.replace(r"^\((.*)\)$", r"-\1", regex=True))
-    out = pd.to_numeric(t, errors="coerce")
-    out[blank] = np.nan
-    return out, blank, out.isna() & ~blank
-
-
-def parse_dates(s):
-    num = pd.to_numeric(s, errors="coerce")
-    if num.notna().mean() > 0.8:
-        v = num.dropna()
-        if v.between(1, 31).all():
-            return pd.Series(pd.NaT, index=s.index, dtype="datetime64[ns]"), "day_of_month"
-        if v.between(20000, 80000).all():
-            return pd.to_datetime(num, unit="D", origin="1899-12-30", errors="coerce"), "excel_serial"
-    return pd.to_datetime(s, errors="coerce", dayfirst=True), "date"
-
-
-@st.cache_data(show_spinner="Cleaning data…")
-def prepare(raw, m, basis, rounding, dedupe):
-    notes, exc, removed, derived = [], {}, [], []
-    mapped = {k: bool(m.get(k)) for k in FIELDS}
-    df = pd.DataFrame(index=raw.index)
-
-    for k in TEXT_FIELDS:
-        df[k] = to_text(raw[m[k]]) if mapped[k] else "Unknown"
-    for k in ("account", "serial"):
-        df[k] = df[k].str.replace(r"\.0$", "", regex=True)
-    if not mapped["vehicle_model"]:
-        df["vehicle_model"] = "Not available"
-
-    blanks, invalid = {}, {}
-    for k in NUM_FIELDS:
-        if mapped[k]:
-            df[k], blanks[k], invalid[k] = to_num(raw[m[k]])
+    if entered:
+        if hmac.compare_digest(entered.strip(), pw):
+            st.session_state["auth_ok"] = True
+            st.rerun()
         else:
-            df[k] = np.nan
+            st.sidebar.error("Incorrect password.")
+    st.info("Enter the access password in the left sidebar to unlock the studio.")
+    return False
 
-    date_kind = None
-    if mapped["emi_date"]:
-        df["emi_date_dt"], date_kind = parse_dates(raw[m["emi_date"]])
+
+if not check_password():
+    st.stop()
+
+
+def hex_to_rgb(h: str):
+    h = h.lstrip("#")
+    if len(h) != 6:
+        return (31, 58, 95)
+    return tuple(int(h[i : i + 2], 16) for i in (0, 2, 4))
+
+
+def fmt_num(v, cur: str = "", decimals: int = 0) -> str:
+    if v is None or (isinstance(v, float) and (math.isnan(v) or math.isinf(v))):
+        return "-"
+    prefix = f"{cur} " if cur else ""
+    if decimals == 0:
+        return f"{prefix}{v:,.0f}"
+    return f"{prefix}{v:,.{decimals}f}"
+
+
+def show_table(df: pd.DataFrame, safe_mode: bool = False, max_rows: int = 100):
+    if df is None or df.empty:
+        st.caption("No records to display.")
+        return
+    view = df.head(max_rows)
+    if safe_mode:
+        st.markdown(
+            f'<div style="overflow-x:auto; max-height:420px; border:1px solid #e2e8f0; border-radius:6px;">'
+            f'{view.to_html(index=False, classes="table", border=0)}</div>',
+            unsafe_allow_html=True,
+        )
     else:
-        df["emi_date_dt"] = pd.Series(pd.NaT, index=df.index, dtype="datetime64[ns]")
+        try:
+            st.dataframe(view, use_container_width=True)
+        except Exception:
+            st.markdown(view.to_html(index=False), unsafe_allow_html=True)
 
-    def drop(mask, reason):
-        nonlocal df
-        mask = mask.to_numpy()
-        if mask.any():
-            r = raw.loc[df.index[mask]].copy()
-            r.insert(0, "Removal reason", reason)
-            removed.append(r)
-            notes.append(("info", f"{int(mask.sum())} row(s) removed: {reason}."))
-            df = df[~mask]
 
-    # --- invalid / total rows ---
-    pat = r"(?i)^\s*(?:grand\s*|sub\s*-?\s*)?totals?\s*:?\s*$"
-    is_total = (df.customer.str.contains(pat) | df.serial.str.contains(pat)
-                | df.branch.str.contains(pat))
-    is_total |= df.customer.str.contains(r"(?i)\btotal\b") & (df.account == "Unknown")
-    drop(is_total, "Sub-total / grand-total row")
-    drop((df.customer == "Unknown") & (df.account == "Unknown"),
-         "Blank row (no customer name and no account id)")
+def make_sample_credit_df() -> pd.DataFrame:
+    rng = np.random.default_rng(42)
+    branches = ["Dhaka North", "Chattogram", "Bogura", "Rangpur", "Jashore", "Rajshahi"]
+    collectors = ["Azmir", "Aminul", "Zahid", "Mannan", "Hasen", "Zamil", "Akter"]
+    sales_p = ["Rahim", "Karim", "Tariq", "Noman", "Sajid"]
+    models = ["Cargo Truck 3T", "Pickup 1.5T", "Mini Covered Van", "Passenger Bus", "Prime Mover"]
+    rows = []
+    for i in range(1, 85):
+        sp = int(rng.choice([1250000, 1650000, 2100000, 2850000, 3400000]))
+        dp_pct = float(rng.choice([0.0, 0.08, 0.12, 0.15, 0.20, 0.25, 0.30]))
+        dp = round(sp * dp_pct)
+        interest = round((sp - dp) * 0.18)
+        bill = sp + interest
+        no_emi = int(rng.choice([24, 36, 48, 60]))
+        emi = round((bill - dp) / no_emi)
+        inst_due = int(rng.integers(4, no_emi))
+        due_emi = int(rng.choice([0, 0, 0, 1, 1, 2, 3, 4, 6, 8, 12, 15]))
+        due_emi = min(due_emi, inst_due)
+        coll_no = max(0, inst_due - due_emi)
+        tot_due = inst_due * emi
+        tot_coll = coll_no * emi
+        overdue = max(0, tot_due - tot_coll)
+        last_m = emi if due_emi <= 1 else int(rng.choice([0, 0, round(emi * 0.5)]))
+        net_bal = max(0, bill - dp - tot_coll)
+        rows.append(
+            {
+                "Serial Number": i,
+                "Customer Name": f"Customer {i:03d}",
+                "Branch Name": rng.choice(branches),
+                "Sales Personnel": rng.choice(sales_p),
+                "Account Id": f"ACC-{340480000 + i}",
+                "Collection Personnel": rng.choice(collectors),
+                "Vehicle registration number": f"DM-NA-{rng.integers(11,25)}-{1000+i}",
+                "Vehicle Model": rng.choice(models),
+                "Sales price": sp,
+                "Down Payment": dp,
+                "Interest": interest,
+                "Bill amount": bill,
+                "Balance receivable": net_bal,
+                "No of EMI": no_emi,
+                "EMI Date": f"2025-{int(rng.integers(1,13)):02d}-15",
+                "EMI": emi,
+                "Installment due number": inst_due,
+                "EMI Collection number": coll_no,
+                "Due EMI Number": due_emi,
+                "Total due amount": tot_due,
+                "Total Collection": tot_coll,
+                "Overdue amount": overdue,
+                "Last month collection": last_m,
+                "Net balance": net_bal,
+            }
+        )
+    return pd.DataFrame(rows)
 
-    # --- duplicates ---
-    known = df.account != "Unknown"
-    drop(known & df.drop(columns=["serial"]).duplicated(keep="first"),
-         "Exact duplicate row (same Account Id, identical values)")
-    known = df.account != "Unknown"
-    dup_acc = known & df.account.duplicated(keep="first")
-    if dedupe:
-        drop(dup_acc, "Duplicate Account Id with different values (first occurrence kept)")
-    elif dup_acc.any():
-        notes.append(("warning", f"{int(dup_acc.sum())} duplicate Account Ids kept because duplicate "
-                                 "removal is off; totals and account matching may be overstated."))
 
-    # --- blanks / non-numeric values (read as 0, reported) ---
-    for k in NUM_FIELDS:
-        if mapped[k]:
-            ni = int(invalid[k].loc[df.index].sum())
-            nb = int(blanks[k].loc[df.index].sum())
-            if ni:
-                notes.append(("warning", f"'{m[k]}': {ni} non-numeric value(s) were read as 0."))
-            if nb:
-                notes.append(("info", f"'{m[k]}': {nb} blank cell(s) were read as 0 in totals."))
-    df[NUM_FIELDS] = df[NUM_FIELDS].fillna(0)
+def make_sample_messy_business_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {"Order_ID": "ORD-1001", "Order Date": "2025-01-05", "Region": "  dhaka ", "Category": "Electronics", "Sales_Rep": "Tanvir", "Revenue": "BDT 125,000/-", "Cost": "92,000", "Profit": "33,000", "Status": "Completed"},
+            {"Order_ID": "ORD-1002", "Order Date": "2025/01/12", "Region": "Chattogram", "Category": "Furniture", "Sales_Rep": "Nadia", "Revenue": "84,500", "Cost": "61,000", "Profit": "23,500", "Status": "Completed"},
+            {"Order_ID": "ORD-1002", "Order Date": "2025/01/12", "Region": "Chattogram", "Category": "Furniture", "Sales_Rep": "Nadia", "Revenue": "84,500", "Cost": "61,000", "Profit": "23,500", "Status": "Completed"},
+            {"Order_ID": "ORD-1003", "Order Date": "18-01-2025", "Region": "DHAKA", "Category": "Electronics", "Sales_Rep": "Tanvir", "Revenue": "$210,000", "Cost": "145,000", "Profit": "65,000", "Status": "Pending"},
+            {"Order_ID": "ORD-1004", "Order Date": "2025-02-02", "Region": "Sylhet", "Category": "Industrial", "Sales_Rep": "Farhan", "Revenue": "340,000", "Cost": "230,000", "Profit": "110,000", "Status": "Completed"},
+            {"Order_ID": "ORD-1005", "Order Date": "2025-02-14", "Region": "Rajshahi", "Category": "Machinery", "Sales_Rep": "Mehedi", "Revenue": "520,000", "Cost": "390,000", "Profit": "130,000", "Status": "Completed"},
+            {"Order_ID": "ORD-1006", "Order Date": "2025-02-21", "Region": "  chattogram", "Category": "Industrial", "Sales_Rep": "Nadia", "Revenue": "175,000", "Cost": "132,000", "Profit": "43,000", "Status": "Overdue"},
+            {"Order_ID": "ORD-1007", "Order Date": "2025-03-04", "Region": "Dhaka", "Category": "Machinery", "Sales_Rep": "Tanvir", "Revenue": "890,000", "Cost": "610,000", "Profit": "280,000", "Status": "Completed"},
+            {"Order_ID": "ORD-1008", "Order Date": "2025-03-15", "Region": "Khulna", "Category": "Furniture", "Sales_Rep": "Sadia", "Revenue": "64,000", "Cost": "49,000", "Profit": "15,000", "Status": "Pending"},
+            {"Order_ID": "Grand Total", "Order Date": "", "Region": "Total", "Category": "", "Sales_Rep": "", "Revenue": "2,493,000", "Cost": "1,770,000", "Profit": "723,000", "Status": ""},
+        ]
+    )
 
-    # --- outstanding basis ---
-    df["outstanding"] = df["net_balance" if basis == "Net balance" else "balance_receivable"]
 
-    # --- overdue amount ---
-    if mapped["overdue_amt"]:
-        df["overdue_raw"] = df.overdue_amt
+TOTAL_PAT = re.compile(r"^\s*(grand\s*total|sub\s*total|total|sum|সর্বমোট|মোট)\b", re.I)
+
+
+def detect_best_header_row(raw_df: pd.DataFrame) -> int:
+    best_row, best_score = 0, -1e9
+    limit = min(35, len(raw_df))
+    for r in range(limit):
+        row = raw_df.iloc[r]
+        non_null = row.dropna()
+        if len(non_null) < 2:
+            continue
+        str_cells = [str(x).strip() for x in non_null if str(x).strip() != ""]
+        if len(str_cells) < 2:
+            continue
+        alpha_cnt = sum(1 for s in str_cells if any(c.isalpha() for c in s))
+        uniq_ratio = len(set(s.lower() for s in str_cells)) / max(1, len(str_cells))
+        score = alpha_cnt * 3 + uniq_ratio * 5 - r * 0.15
+        if score > best_score:
+            best_score, best_row = score, r
+    return best_row
+
+
+def parse_messy_number_series(s: pd.Series):
+    if pd.api.types.is_numeric_dtype(s):
+        return s, 0
+    non_na = s.dropna().astype(str).str.strip()
+    non_na = non_na[non_na != ""]
+    if len(non_na) == 0:
+        return s, 0
+    cleaned = non_na.copy()
+    cleaned = cleaned.str.replace(r"^\((.*)\)$", r"-\1", regex=True)
+    cleaned = cleaned.str.replace(
+        r"(?i)(bdt|tk|taka|usd|eur|inr|rs|৳|\$|€|£|/-|,|\s)", "", regex=True
+    )
+    cleaned = cleaned.str.replace(r"%$", "", regex=True)
+    num = pd.to_numeric(cleaned, errors="coerce")
+    success_rate = num.notna().mean()
+    if success_rate >= 0.75:
+        full_clean = s.astype(str).str.strip()
+        full_clean = full_clean.str.replace(r"^\((.*)\)$", r"-\1", regex=True)
+        full_clean = full_clean.str.replace(
+            r"(?i)(bdt|tk|taka|usd|eur|inr|rs|৳|\$|€|£|/-|,|\s)", "", regex=True
+        )
+        full_clean = full_clean.str.replace(r"%$", "", regex=True)
+        out = pd.to_numeric(full_clean, errors="coerce")
+        fixed_cnt = int((out.notna() & ~s.apply(lambda x: isinstance(x, (int, float)))).sum())
+        return out, fixed_cnt
+    return s, 0
+
+
+def auto_clean_dataframe(
+    df_in: pd.DataFrame,
+    drop_totals: bool = True,
+    drop_dups: bool = True,
+    standardize_text: bool = True,
+    missing_num_policy: str = "Keep as NaN (transparent)",
+    missing_txt_policy: str = "Fill with 'Unknown'",
+):
+    df = df_in.copy()
+    audit = []
+
+    new_cols = []
+    seen = {}
+    for i, c in enumerate(df.columns):
+        name = re.sub(r"\s+", " ", str(c).strip())
+        if not name or name.lower().startswith("unnamed"):
+            name = f"Column_{i+1}"
+        if name in seen:
+            seen[name] += 1
+            name = f"{name}_{seen[name]}"
+        else:
+            seen[name] = 1
+        new_cols.append(name)
+    df.columns = new_cols
+
+    r0, c0 = df.shape
+    df = df.replace(r"^\s*$", np.nan, regex=True)
+    df = df.dropna(how="all").dropna(axis=1, how="all")
+    if r0 - len(df) > 0:
+        audit.append(f"Removed {r0 - len(df)} completely blank row(s).")
+    if c0 - df.shape[1] > 0:
+        audit.append(f"Removed {c0 - df.shape[1]} completely empty column(s).")
+
+    if drop_totals and len(df) > 0:
+        check_cols = df.columns[: min(5, len(df.columns))]
+        mask_total = pd.Series(False, index=df.index)
+        for col in check_cols:
+            mask_total = mask_total | df[col].astype(str).str.match(TOTAL_PAT, na=False)
+        tot_cnt = int(mask_total.sum())
+        if tot_cnt > 0:
+            df = df.loc[~mask_total].copy()
+            audit.append(f"Removed {tot_cnt} embedded Subtotal / Grand Total row(s).")
+
+    txt_fixed = 0
+    for col in df.columns:
+        if df[col].dtype == object:
+            orig = df[col].copy()
+            s = df[col].astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
+            s = s.replace({"nan": np.nan, "None": np.nan, "NULL": np.nan, "null": np.nan, "": np.nan})
+            non_na = s.dropna()
+            if standardize_text and 0 < non_na.nunique() <= 40:
+                lower_nunique = non_na.str.lower().nunique()
+                if lower_nunique < non_na.nunique():
+                    s = s.str.title()
+            changed = int((orig.fillna("") != s.fillna("")).sum())
+            txt_fixed += changed
+            df[col] = s
+    if txt_fixed > 0:
+        audit.append(f"Trimmed extra spaces and standardized text in {txt_fixed} cell(s).")
+
+    num_cols_converted = []
+    for col in df.columns:
+        col_low = col.lower()
+        if any(k in col_low for k in ["id", "serial", "account", "phone", "mobile", "reg", "vehicle", "code"]):
+            continue
+        converted, cnt = parse_messy_number_series(df[col])
+        if cnt > 0:
+            df[col] = converted
+            num_cols_converted.append(f"{col} ({cnt} cells)")
+    if num_cols_converted:
+        audit.append("Converted messy number/currency text to numeric: " + ", ".join(num_cols_converted))
+
+    if drop_dups and len(df) > 0:
+        before = len(df)
+        df = df.drop_duplicates().copy()
+        if before - len(df) > 0:
+            audit.append(f"Removed {before - len(df)} exact duplicate row(s).")
+
+    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    txt_cols = [c for c in df.columns if c not in num_cols]
+
+    if missing_num_policy == "Fill with 0":
+        na_cnt = int(df[num_cols].isna().sum().sum()) if num_cols else 0
+        if na_cnt > 0:
+            df[num_cols] = df[num_cols].fillna(0)
+            audit.append(f"Filled {na_cnt} missing numeric cell(s) with 0 (per user setting).")
+    elif missing_num_policy == "Fill with Column Median":
+        for c in num_cols:
+            na_c = int(df[c].isna().sum())
+            if na_c > 0 and df[c].notna().any():
+                df[c] = df[c].fillna(df[c].median())
+                audit.append(f"Filled {na_c} missing value(s) in '{c}' with median ({df[c].median():,.2f}).")
+
+    if missing_txt_policy == "Fill with 'Unknown'":
+        for c in txt_cols:
+            na_c = int(df[c].isna().sum())
+            if na_c > 0:
+                df[c] = df[c].fillna("Unknown")
+        audit.append("Filled blank text/category cells with 'Unknown'.")
+
+    if not audit:
+        audit.append("Dataset was already clean; no structural fixes were needed.")
+
+    return df.reset_index(drop=True), audit
+
+
+CREDIT_FIELDS = [
+    ("serial", "Serial Number", ["serial number", "sl", "sl no", "sl.", "s/n", "serial"]),
+    ("customer", "Customer Name", ["customer name", "customer", "client name", "party name", "borrower"]),
+    ("branch", "Branch Name", ["branch name", "branch", "zone", "office", "location", "showroom"]),
+    ("sales_person", "Sales Personnel", ["sales personnel", "sales person", "sales officer", "executive", "rm"]),
+    ("account_id", "Account Id", ["account id", "account no", "acc id", "loan id", "agreement no", "code", "id"]),
+    ("collector", "Collection Personnel", ["collection personnel", "collector", "recovery officer", "collection officer"]),
+    ("vehicle_reg", "Vehicle registration number", ["vehicle registration number", "registration no", "reg no", "vehicle no", "chassis"]),
+    ("vehicle_model", "Vehicle Model (optional)", ["vehicle model", "model", "product", "asset model"]),
+    ("sales_price", "Sales price", ["sales price", "sale price", "vehicle price", "cash price", "invoice price"]),
+    ("down_payment", "Down Payment", ["down payment", "dp", "advance", "down pay"]),
+    ("interest", "Interest", ["interest", "interest amount", "markup", "profit"]),
+    ("bill_amount", "Bill amount", ["bill amount", "total bill", "contract value", "hire price"]),
+    ("balance_rec", "Balance receivable", ["balance receivable", "receivable", "bal receivable", "Closing Balance"]),
+    ("no_of_emi", "No of EMI", ["no of emi", "total emi", "tenure", "installments", "no. of emi"]),
+    ("emi_date", "EMI Date", ["emi date", "installment date", "due date", "disbursement date"]),
+    ("emi", "EMI", ["emi", "emi amount", "installment amount", "monthly emi"]),
+    ("inst_due_no", "Installment due number", ["installment due number", "inst due no", "due installment no", "installment due no"]),
+    ("emi_coll_no", "EMI Collection number", ["emi collection number", "emi coll no", "collected emi no", "paid emi"]),
+    ("due_emi_no", "Due EMI Number", ["due emi number", "due emi no", "due emi", "overdue emi", "arrear emi"]),
+    ("total_due", "Total due amount", ["total due amount", "total due amt/", "total due amt", "total due", "cumulative due"]),
+    ("total_coll", "Total Collection", ["total collection", "total coll", "cumulative collection", "collected amount"]),
+    ("overdue_amt", "Overdue amount", ["overdue amount", "over due amt", "overdue amt", "overdue", "arrear amount"]),
+    ("last_m_coll", "Last month collection", ["last month collection", "last month coll", "lm collection", "current month collection"]),
+    ("net_balance", "Net balance", ["net balance", "net bal", "outstanding", "outstanding balance", "principal outstanding"]),
+]
+
+
+def auto_map_credit_columns(cols):
+    norm_map = {re.sub(r"[^a-z0-9]+", " ", str(c).lower()).strip(): c for c in cols}
+    mapping = {}
+    used = set()
+    for key, _, aliases in CREDIT_FIELDS:
+        matched = None
+        for al in aliases:
+            al_norm = re.sub(r"[^a-z0-9]+", " ", al.lower()).strip()
+            if al_norm in norm_map and norm_map[al_norm] not in used:
+                matched = norm_map[al_norm]
+                break
+        if not matched:
+            for al in aliases:
+                al_norm = re.sub(r"[^a-z0-9]+", " ", al.lower()).strip()
+                for cn, orig_c in norm_map.items():
+                    if orig_c not in used and (al_norm in cn or cn in al_norm) and len(al_norm) >= 3:
+                        if "remark" in cn or "note" in cn or "comment" in cn:
+                            continue
+                        matched = orig_c
+                        break
+                if matched:
+                    break
+        mapping[key] = matched
+        if matched:
+            used.add(matched)
+    return mapping
+
+
+def to_clean_num(s: pd.Series) -> pd.Series:
+    if pd.api.types.is_numeric_dtype(s):
+        return pd.to_numeric(s, errors="coerce").fillna(0.0)
+    cleaned = (
+        s.astype(str)
+        .str.strip()
+        .str.replace(r"^\((.*)\)$", r"-\1", regex=True)
+        .str.replace(r"(?i)(bdt|tk|usd|৳|\$|,|\s|/-)", "", regex=True)
+    )
+    return pd.to_numeric(cleaned, errors="coerce").fillna(0.0)
+
+
+def prepare_credit_data(raw: pd.DataFrame, mapping: dict, out_basis: str):
+    df = pd.DataFrame(index=raw.index)
+    notes = []
+
+    mask_tot = pd.Series(False, index=raw.index)
+    for c in raw.columns[: min(5, len(raw.columns))]:
+        mask_tot = mask_tot | raw[c].astype(str).str.match(TOTAL_PAT, na=False)
+    if mask_tot.any():
+        notes.append(("Info", f"Excluded {int(mask_tot.sum())} total/subtotal row(s)."))
+        raw = raw.loc[~mask_tot].copy()
+        df = pd.DataFrame(index=raw.index)
+
+    txt_keys = {"serial", "customer", "branch", "sales_person", "account_id", "collector", "vehicle_reg", "vehicle_model", "emi_date"}
+    for key, label, _ in CREDIT_FIELDS:
+        col = mapping.get(key)
+        if col and col in raw.columns:
+            if key in txt_keys:
+                df[key] = raw[col].astype(str).str.strip().replace({"nan": "Unknown", "None": "Unknown", "": "Unknown"})
+            else:
+                df[key] = to_clean_num(raw[col])
+        else:
+            df[key] = "Unknown" if key in txt_keys else 0.0
+
+    if mapping.get("overdue_amt") is None and (mapping.get("total_due") or mapping.get("total_coll")):
+        df["overdue_amt"] = (df["total_due"] - df["total_coll"]).clip(lower=0.0)
+        notes.append(("Warning", "Overdue amount derived as Total Due - Total Collection."))
     else:
-        df["overdue_raw"] = df.total_due - df.total_coll
-        derived.append("Overdue amount = Total due amount − Total Collection (column was not mapped).")
-    df["overdue_amt"] = df.overdue_raw.clip(lower=0)
+        df["overdue_amt"] = df["overdue_amt"].clip(lower=0.0)
 
-    # --- due EMI number ---
-    if mapped["due_emi_no"]:
-        df["due_raw"] = df.due_emi_no
-    elif mapped["inst_due_no"] and mapped["emi_coll_no"]:
-        df["due_raw"] = df.inst_due_no - df.emi_coll_no
-        derived.append("Due EMI Number = Installment due number − EMI Collection number (column not mapped).")
-    elif mapped["emi"]:
-        df["due_raw"] = np.where(df.emi > 0, df.overdue_raw / df.emi.replace(0, np.nan), 0)
-        derived.append("Due EMI Number = Overdue amount ÷ EMI (column not mapped; estimate).")
-    else:
-        df["due_raw"] = 0.0
-        notes.append(("error", "Due EMI Number cannot be determined - bucket analysis is unreliable."))
-    df["due_emi_no"] = df.due_raw.clip(lower=0)
-    for d in derived:
-        notes.append(("warning", "Derived field: " + d))
+    if mapping.get("due_emi_no") is None:
+        if mapping.get("inst_due_no") and mapping.get("emi_coll_no"):
+            df["due_emi_no"] = (df["inst_due_no"] - df["emi_coll_no"]).clip(lower=0.0)
+            notes.append(("Warning", "Due EMI Number derived as Installment Due - EMI Collection Number."))
+        elif mapping.get("emi"):
+            df["due_emi_no"] = np.where(df["emi"] > 0, df["overdue_amt"] / df["emi"], 0.0)
+            notes.append(("Warning", "Due EMI Number estimated as Overdue Amount / EMI."))
 
-    # --- buckets ---
-    fn = np.ceil if rounding.startswith("Round up") else np.floor
-    df["due_emi_bkt"] = fn(df.due_emi_no.round(6)).astype(int)
-    df["bucket"] = pd.cut(df.due_emi_bkt, [-1, 0, 1, 2, 3, 5, np.inf], labels=BUCKETS)
-    df["bidx"] = df.bucket.cat.codes
-    df["risk"] = pd.Categorical(df.bucket.astype(str).map(RISK), categories=RISK_ORDER, ordered=True)
-    df["prov_group"] = pd.Categorical(df.bucket.astype(str).map(PROV_MAP),
-                                      categories=PROV_GROUPS, ordered=True)
-    if mapped["sales_price"] and mapped["down_payment"]:
-        df["dp_pct"] = np.where(df.sales_price > 0,
-                                df.down_payment / df.sales_price.replace(0, np.nan), np.nan)
-    else:
-        df["dp_pct"] = np.nan
+    df["outstanding"] = df["net_balance"] if out_basis == "Net balance" else df["balance_rec"]
+    if (df["outstanding"] == 0).all() and (df["net_balance"] > 0).any():
+        df["outstanding"] = df["net_balance"]
+    elif (df["outstanding"] == 0).all() and (df["balance_rec"] > 0).any():
+        df["outstanding"] = df["balance_rec"]
 
-    # --- validation checks ---
-    show_cols = ["account", "customer", "branch", "collector", "outstanding",
-                 "total_due", "total_coll", "overdue_raw", "due_raw"]
+    emi_int = np.ceil(df["due_emi_no"].clip(lower=0)).astype(int)
+    emi_int = np.where((emi_int == 0) & (df["overdue_amt"] > 0), 1, emi_int)
 
-    def flag(mask, msg, level="warning"):
-        n = int(mask.sum())
-        if n:
-            notes.append((level, f"{n} account(s): {msg}"))
-            exc[msg] = df.loc[mask, show_cols]
-
-    if mapped["overdue_amt"] and mapped["total_due"] and mapped["total_coll"]:
-        flag(((df.total_due - df.total_coll) - df.overdue_raw).abs() > 1.0,
-             "Overdue amount differs from Total due − Total Collection (tolerance 1.00)")
-    if mapped["due_emi_no"] and mapped["inst_due_no"] and mapped["emi_coll_no"]:
-        flag(((df.inst_due_no - df.emi_coll_no) - df.due_raw).abs() > 0.01,
-             "Due EMI Number differs from Installment due − EMI Collection number")
-    flag(df.outstanding < 0, "Negative outstanding balance")
-    flag(df.overdue_raw < 0, "Negative overdue (advance payment?) - excluded from overdue totals")
-    flag(df.due_raw < 0, "Negative Due EMI Number - treated as 0 in buckets")
-    flag((df.overdue_amt > 0) & (df.due_raw <= 0), "Overdue amount > 0 but Due EMI Number is 0", "info")
-    flag((df.overdue_amt == 0) & (df.due_raw > 0), "Due EMI Number > 0 but Overdue amount is 0", "info")
-    flag(df.overdue_amt > df.outstanding + 1.0, "Overdue amount exceeds outstanding balance")
-    if mapped["sales_price"] and mapped["down_payment"]:
-        flag(df.down_payment > df.sales_price, "Down payment exceeds sales price")
-    for col, nm_ in (("branch", "branch"), ("collector", "collection personnel")):
-        n = int((df[col] == "Unknown").sum())
-        if n:
-            notes.append(("info", f"{n} account(s) have an unknown {nm_}."))
-    if date_kind == "date":
-        nbad = int((df.emi_date_dt.isna() & raw.loc[df.index, m["emi_date"]].notna()).sum())
-        if nbad:
-            notes.append(("warning", f"{nbad} EMI Date value(s) could not be read as dates."))
-    elif date_kind == "day_of_month":
-        notes.append(("info", "EMI Date holds a day-of-month (1-31); the reporting-period filter is disabled."))
-    if not mapped["vehicle_model"]:
-        notes.append(("info", "No Vehicle Model column mapped - vehicle-model analysis unavailable."))
-
-    quality = {"notes": notes, "exceptions": exc, "mapped": mapped, "derived": derived,
-               "removed": pd.concat(removed) if removed else pd.DataFrame(),
-               "rows_in": len(raw), "rows_out": len(df)}
-    return df, quality
+    df["bucket"] = np.select(
+        [emi_int <= 0, emi_int == 1, emi_int == 2, emi_int == 3, emi_int <= 5],
+        ["Current (0 EMI)", "1 EMI", "2 EMI", "3 EMI", "4-5 EMI"],
+        default="6+ EMI",
+    )
+    df["risk_status"] = np.select(
+        [emi_int <= 0, emi_int == 1, emi_int == 2, emi_int <= 5],
+        ["Regular", "Low Risk", "Medium Risk", "High Risk"],
+        default="Critical Risk",
+    )
+    df["dp_pct"] = np.where(df["sales_price"] > 0, (df["down_payment"] / df["sales_price"]).clip(0, 1), 0.0)
+    return df.reset_index(drop=True), notes
 
 
-# ======================================================================
-# Analytics
-# ======================================================================
-def kpis(df):
-    out, due = df.outstanding.sum(), df.total_due.sum()
-    coll, od = df.total_coll.sum(), df.overdue_amt.sum()
-
-    def par(n):
-        return df.loc[df.due_emi_bkt >= n, "outstanding"].sum()
-
-    demand, lm = df.loc[df.outstanding > 0, "emi"].sum(), df.last_month_coll.sum()
-    return dict(bill=df.bill_amount.sum(), outstanding=out, total_due=due, collected=coll,
-                overdue=od, efficiency=div(coll, due), overdue_pct=div(od, out),
-                accounts=len(df), od_accounts=int((df.overdue_amt > 0).sum()),
-                par1=div(par(1), out), par2=div(par(2), out), par3=div(par(3), out),
-                par3_amt=par(3), par3_accts=int((df.due_emi_bkt >= 3).sum()),
-                last_month=lm, demand=demand, lm_ratio=div(lm, demand), interest=df.interest.sum())
-
-
-def perf(df, by, sort=True):
-    g = df.groupby(by, observed=False).agg(
-        accounts=("account", "size"), outstanding=("outstanding", "sum"),
-        total_due=("total_due", "sum"), collected=("total_coll", "sum"),
-        overdue=("overdue_amt", "sum"), last_month=("last_month_coll", "sum"),
-        accts_overdue=("overdue_amt", lambda s: int((s > 0).sum())),
-        accts_3plus=("due_emi_bkt", lambda s: int((s >= 3).sum())))
-    g["efficiency"] = g.collected / g.total_due.replace(0, np.nan)
-    g["overdue_pct"] = g.overdue / g.outstanding.replace(0, np.nan)
-    return g.sort_values("overdue", ascending=False) if sort else g
+def score_recovery_priority(df: pd.DataFrame) -> pd.DataFrame:
+    od = df[df["overdue_amt"] > 0].copy()
+    if od.empty:
+        return pd.DataFrame()
+    od["p_overdue"] = od["overdue_amt"].rank(pct=True) * 100
+    od["p_out"] = od["outstanding"].rank(pct=True) * 100
+    od["p_emi"] = (od["due_emi_no"].clip(0, 6) / 6.0) * 100
+    od["p_dp"] = (1.0 - (od["dp_pct"].clip(0, 0.30) / 0.30)) * 100
+    od["score"] = (0.40 * od["p_overdue"] + 0.30 * od["p_emi"] + 0.15 * od["p_dp"] + 0.15 * od["p_out"]).round(1)
+    od = od.sort_values("score", ascending=False).reset_index(drop=True)
+    od["rank"] = np.arange(1, len(od) + 1)
+    od["main_driver"] = np.where(
+        od["p_overdue"] >= od["p_emi"], "Overdue amount", "High Due EMI count"
+    )
+    od["explanation"] = od.apply(
+        lambda r: f"Overdue {r['overdue_amt']:,.0f}; {r['due_emi_no']:.0f} EMI due; DP {r['dp_pct']*100:.0f}%",
+        axis=1,
+    )
+    return od
 
 
-MCOLS = ["account", "customer", "branch", "collector", "outstanding", "overdue_amt",
-         "total_coll", "bucket", "bidx"]
-
-
-def mom_accounts(cur, prev):
-    """Match accounts on Account Id between two months."""
-    c = cur.loc[cur.account != "Unknown", MCOLS]
-    p = prev.loc[prev.account != "Unknown", MCOLS]
-    mg = c.merge(p, on="account", how="outer", suffixes=("_cur", "_prev"), indicator=True)
-    for col in ("customer", "branch", "collector"):
-        mg[col] = mg[f"{col}_cur"].fillna(mg[f"{col}_prev"])
-    mg["movement"] = np.select(
-        [mg._merge == "left_only", mg._merge == "right_only",
-         mg.bidx_cur > mg.bidx_prev, mg.bidx_cur < mg.bidx_prev],
-        ["New account", "Closed / not in current file", "Moved to higher bucket",
-         "Moved to lower bucket"], "No change")
-    mg["overdue_change"] = mg.overdue_amt_cur.fillna(0) - mg.overdue_amt_prev.fillna(0)
-    mg["collection_in_period"] = mg.total_coll_cur - mg.total_coll_prev
-    mg["bucket_cur"] = mg.bucket_cur.astype(object)
-    mg["bucket_prev"] = mg.bucket_prev.astype(object)
-    return mg
-
-
-def compare_group(cur, prev, by):
-    cols = ["accounts", "outstanding", "overdue", "collected", "efficiency"]
-    a, b = perf(cur, by, False)[cols], perf(prev, by, False)[cols]
-    j = a.join(b, how="outer", lsuffix="_cur", rsuffix="_prev")
-    for c in ("accounts", "outstanding", "overdue", "collected"):
-        j[[f"{c}_cur", f"{c}_prev"]] = j[[f"{c}_cur", f"{c}_prev"]].fillna(0)
-    j["overdue_change"] = j.overdue_cur - j.overdue_prev
-    j["collected_change"] = j.collected_cur - j.collected_prev
-    j["efficiency_change_pts"] = (j.efficiency_cur - j.efficiency_prev) * 100
-    return j.sort_values("overdue_cur", ascending=False)
-
-
-def roll_matrix(cur, prev):
-    """Opening (previous file) -> closing (current file) bucket movement."""
-    c = cur.loc[cur.account != "Unknown", ["account", "bucket", "outstanding"]]
-    p = prev.loc[prev.account != "Unknown", ["account", "bucket", "outstanding"]]
-    mg = p.merge(c, on="account", how="outer", suffixes=("_open", "_close"), indicator=True)
-    new_lbl, closed_lbl = "New (not in opening)", "Closed / not in closing"
-    o = mg.bucket_open.astype(object).where(mg._merge != "right_only", new_lbl)
-    cl = mg.bucket_close.astype(object).where(mg._merge != "left_only", closed_lbl)
-    rows, cols = BUCKETS + [new_lbl], BUCKETS + [closed_lbl]
-    cnt = pd.crosstab(o, cl).reindex(index=rows, columns=cols, fill_value=0)
-    amt = pd.crosstab(o, cl, values=mg.outstanding_open.fillna(mg.outstanding_close),
-                      aggfunc="sum").reindex(index=rows, columns=cols).fillna(0)
-    base = cnt.loc[BUCKETS]
-    rate = base.div(base.sum(axis=1).replace(0, np.nan), axis=0)
-    summ = []
-    for i, b in enumerate(BUCKETS):
-        tot = int(base.loc[b].sum())
-        hi, lo = int(base.loc[b, BUCKETS[i + 1:]].sum()), int(base.loc[b, BUCKETS[:i]].sum())
-        summ.append({"Opening bucket": b, "Opening accounts": tot,
-                     "Improved (lower bucket)": lo, "Same bucket": int(base.loc[b, b]),
-                     "Rolled to higher bucket": hi, "Closed / not in closing": int(base.loc[b, closed_lbl]),
-                     "Roll-forward rate": div(hi, tot)})
-    return {"cnt": cnt, "amt": amt, "rate": rate, "summary": pd.DataFrame(summ).set_index("Opening bucket")}
-
-
-def provision_table(df, rates):
-    g = df.groupby("prov_group", observed=False).agg(
-        accounts=("account", "size"), outstanding=("outstanding", "sum"), overdue=("overdue_amt", "sum"))
-    g["rate_pct"] = [rates[i] for i in g.index]
-    g["provision"] = g.outstanding * g.rate_pct / 100
-    return g
-
-
-def priority(df, w, dp_cap, cur, top_n):
-    d = df[df.overdue_amt > 0].copy()
-    if d.empty:
-        return d
-    d["p_overdue"] = d.overdue_amt.rank(pct=True)
-    d["p_outstanding"] = d.outstanding.rank(pct=True)
-    c = pd.DataFrame(index=d.index)
-    c["overdue"] = d.p_overdue * 100
-    c["due_emi"] = d.due_emi_no.clip(upper=6) / 6 * 100
-    c["down_payment"] = (1 - d.dp_pct.clip(0, dp_cap) / dp_cap) * 100  # NaN stays NaN (not invented)
-    c["outstanding"] = d.p_outstanding * 100
-    wt = pd.Series(w)[c.columns]
-    num = c.mul(wt).sum(axis=1, skipna=True)
-    den = c.notna().mul(wt).sum(axis=1)
-    d["score"] = num / den.replace(0, np.nan)
-    d["main_driver"] = c.mul(wt).div(den.replace(0, np.nan), axis=0).fillna(-1).idxmax(axis=1).map(DRIVER_LABEL)
-    d = d.sort_values("score", ascending=False).head(top_n)
-    d["rank"] = range(1, len(d) + 1)
-
-    def topx(p):
-        return max(1, int(math.ceil((1 - p) * 100)))
-
-    d["explanation"] = [
-        f"Overdue {cur}{r.overdue_amt:,.0f} (top {topx(r.p_overdue)}% of overdue accounts); "
-        f"{r.due_emi_no:g} EMI due; "
-        + (f"down payment {r.dp_pct:.0%} of sales price; " if pd.notna(r.dp_pct)
-           else "down payment % not available (excluded from score); ")
-        + f"outstanding {cur}{r.outstanding:,.0f} (top {topx(r.p_outstanding)}%). "
-          f"Main driver: {r.main_driver}."
-        for r in d.itertuples()]
-    return d
-
-
-def read_targets(file):
-    t = pd.read_excel(file)
-    cols = {norm(c): c for c in t.columns}
-    ccol = next((cols[k] for k in cols if "collect" in k or k in ("name", "staff", "personnel")), t.columns[0])
-    tcol = next((cols[k] for k in cols if "target" in k), None)
-    if tcol is None:
-        raise ValueError("No column containing 'target' found.")
-    s = pd.Series(pd.to_numeric(t[tcol], errors="coerce").fillna(0).values,
-                  index=t[ccol].astype(str).str.strip().str.lower())
-    return s.groupby(level=0).sum()
-
-
-# ======================================================================
-# Rule-based commentary
-# ======================================================================
-def make_insights(k, br, co, cur, top10_share, mom):
-    m = lambda x: f"{cur}{x:,.0f}"
-    ins = [
-        f"Outstanding is {m(k['outstanding'])} across {k['accounts']:,} accounts; {m(k['overdue'])} "
-        f"({pct(k['overdue_pct'])}) is overdue, spread over {k['od_accounts']:,} accounts.",
-        f"Collection efficiency is {pct(k['efficiency'])}: {m(k['collected'])} collected against {m(k['total_due'])} due.",
-        f"PAR1 {pct(k['par1'])}, PAR2 {pct(k['par2'])}, PAR3 {pct(k['par3'])}; {k['par3_accts']:,} accounts "
-        f"have 3+ EMIs due with {m(k['par3_amt'])} outstanding.",
-        f"Last-month collection was {m(k['last_month'])} against a monthly EMI demand of {m(k['demand'])} "
-        f"({pct(k['lm_ratio'], 0)}).",
-    ]
-    if pd.notna(top10_share):
-        ins.append(f"The 10 largest overdue accounts hold {pct(top10_share, 0)} of total overdue.")
-    b = br[br.outstanding > 0]
-    if len(b) > 1:
-        ins.append(f"Highest overdue % by branch: {b.overdue_pct.idxmax()} ({pct(b.overdue_pct.max())}); "
-                   f"best collection efficiency: {b.efficiency.idxmax()} ({pct(b.efficiency.max())}).")
-    c = co[co.total_due > 0]
-    if len(c) > 1:
-        ins.append(f"Lowest collector efficiency: {c.efficiency.idxmin()} ({pct(c.efficiency.min())}).")
-    if mom:
-        ins.append(f"Versus the previous file: outstanding {mom['d_out']:+,.0f}, overdue {mom['d_od']:+,.0f}, "
-                   f"efficiency {mom['d_eff'] * 100:+.1f} pts; {mom['higher']:,} accounts moved to a higher "
-                   f"bucket and {mom['lower']:,} improved.")
-    return ins
-
-
-def make_recs(k, br, co, cur, mom):
-    recs = []
-    if k["par3_accts"]:
-        recs.append((f"Issue final notices and start vehicle-recovery review for {k['par3_accts']:,} accounts with "
-                     f"3+ EMIs due ({cur}{k['par3_amt']:,.0f} outstanding).", "Within 7 days"))
-    recs.append(("Contact every 1-EMI-due customer to stop roll-over into higher buckets.", "Within 7 days"))
-    if pd.notna(k["efficiency"]) and k["efficiency"] < 0.90:
-        recs.append(("Collection efficiency is below 90%: set weekly collector targets and daily follow-up reviews.",
-                     "This month"))
-    b = br[br.outstanding > 0]
-    if len(b) > 1:
-        recs.append((f"Hold a recovery review with the branch manager of {b.overdue_pct.idxmax()} "
-                     "(highest overdue %).", "Within 14 days"))
-    c = co[co.total_due > 0]
-    if len(c) > 1:
-        recs.append((f"Review workload and give field support to {c.efficiency.idxmin()} (lowest efficiency).",
-                     "Within 14 days"))
-    if mom and mom["higher"]:
-        recs.append((f"Investigate the {mom['higher']:,} accounts that moved to a higher bucket since the last file.",
-                     "Within 14 days"))
-    recs.append(("Tighten approval for low down-payment sales; track overdue by sales personnel monthly.",
-                 "Next quarter"))
-    return recs
-
-
-# ======================================================================
-# Gemini (free tier) - only aggregated figures are sent
-# ======================================================================
-def _jd(o):
-    if isinstance(o, np.integer):
-        return int(o)
-    if isinstance(o, np.floating):
-        return None if np.isnan(o) else float(o)
-    return str(o)
-
-
-def gemini_commentary(payload, key, model):
-    prompt = (
-        "You are a senior credit-risk analyst writing for the management of a vehicle installment-sale company.\n"
-        "Rules: use ONLY the figures in the JSON; never invent numbers; if something is not provided, say so; "
-        "be concise and use plain executive language.\n"
-        "Write these sections with headings: 1. Overall performance and major changes, 2. Collection efficiency, "
-        "3. High-risk accounts, 4. Branch and collector performance, 5. Recovery recommendations (5 specific actions).\n\n"
-        f"DATA:\n{json.dumps(payload, default=_jd)}")
+def generate_ai_insights(summary_text: str) -> str:
+    api_key = get_secret("GEMINI_API_KEY", "").strip()
+    model = get_secret("GEMINI_MODEL", "gemini-2.5-flash").strip()
+    if not api_key:
+        return (
+            "### 🤖 Automated Executive Briefing (Built-in Engine)\n"
+            f"{summary_text}\n\n"
+            "**Strategic Recommendations:**\n"
+            "1. **Immediate High-Risk Focus:** Prioritize the top 20% accounts/categories driving the majority of overdue or revenue variance.\n"
+            "2. **Process & Data Standardization:** Use the cleaned Excel export as the single source of truth for management review.\n"
+            "3. **Weekly Tracking:** Monitor collection efficiency and category conversion weekly to prevent bucket roll-forward."
+        )
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-    r = requests.post(url, headers={"x-goog-api-key": key, "Content-Type": "application/json"},
-                      json={"contents": [{"parts": [{"text": prompt}]}],
-                            "generationConfig": {"temperature": 0.2, "maxOutputTokens": 4096}}, timeout=90)
-    r.raise_for_status()
-    return r.json()["candidates"][0]["content"]["parts"][0]["text"]
+    prompt = (
+        "You are an Executive Management Consultant. Based strictly on the following verified dataset summary "
+        "(do not invent any numbers), write a concise, board-ready executive summary with: "
+        "1) Key Findings, 2) Risk & Performance Highlights, and 3) 4 Actionable Recommendations.\n\n"
+        f"{summary_text}"
+    )
+    try:
+        resp = requests.post(
+            url,
+            headers={"x-goog-api-key": api_key, "Content-Type": "application/json"},
+            json={"contents": [{"parts": [{"text": prompt}]}]},
+            timeout=25,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"]
+        return f"Gemini API returned status {resp.status_code}. Built-in summary:\n\n{summary_text}"
+    except Exception as e:
+        return f"AI service unreachable ({e}). Built-in summary:\n\n{summary_text}"
 
 
-# ======================================================================
-# PDF
-# ======================================================================
-@st.cache_data(show_spinner=False)
-def read_pdf(b):
-    text, tables = "", []
-    with pdfplumber.open(io.BytesIO(b)) as pdf:
-        for page in pdf.pages:
-            text += (page.extract_text() or "") + "\n"
-            for t in page.extract_tables():
-                if t and len(t) > 1:
-                    tables.append(pd.DataFrame(t).fillna("").astype(str))
-    return text, tables
+def _add_slide_header(slide, title: str, subtitle: str, rgb):
+    banner = slide.shapes.add_shape(MSO_SHAPE.RECTANGLE, Inches(0), Inches(0), Inches(13.333), Inches(0.95))
+    banner.fill.solid()
+    banner.fill.fore_color.rgb = RGBColor(*rgb)
+    banner.line.fill.background()
+    tf = banner.text_frame
+    tf.word_wrap = True
+    p = tf.paragraphs[0]
+    p.text = title
+    p.font.size = Pt(22)
+    p.font.bold = True
+    p.font.color.rgb = RGBColor(255, 255, 255)
+    if subtitle:
+        p2 = tf.add_paragraph()
+        p2.text = subtitle
+        p2.font.size = Pt(11)
+        p2.font.color.rgb = RGBColor(220, 230, 242)
 
 
-# ======================================================================
-# PowerPoint (native, editable charts)
-# ======================================================================
-def _rgb(h):
-    return RGBColor.from_string(h.lstrip("#").upper())
+def _add_table_to_slide(slide, df: pd.DataFrame, left=0.5, top=1.3, width=12.3, max_rows=10):
+    view = df.head(max_rows).copy()
+    rows, cols = len(view) + 1, len(view.columns)
+    if cols == 0:
+        return
+    shape = slide.shapes.add_table(rows, cols, Inches(left), Inches(top), Inches(width), Inches(0.38 * rows))
+    tbl = shape.table
+    for j, c in enumerate(view.columns):
+        cell = tbl.cell(0, j)
+        cell.text = str(c)
+        for p in cell.text_frame.paragraphs:
+            p.font.size = Pt(10)
+            p.font.bold = True
+    for i in range(len(view)):
+        for j, c in enumerate(view.columns):
+            val = view.iloc[i, j]
+            cell = tbl.cell(i + 1, j)
+            if isinstance(val, (int, float, np.number)) and not pd.isna(val):
+                cell.text = f"{val:,.1f}" if isinstance(val, float) and not val.is_integer() else f"{val:,.0f}"
+            else:
+                cell.text = str(val) if not pd.isna(val) else "-"
+            for p in cell.text_frame.paragraphs:
+                p.font.size = Pt(9)
 
 
-def para(tf, text, size=14, bold=False, color=None, first=False, space=6, align=None):
-    p = tf.paragraphs[0] if first else tf.add_paragraph()
-    r = p.add_run()
-    r.text = text
-    r.font.size, r.font.bold = Pt(size), bold
-    if color is not None:
-        r.font.color.rgb = color
-    p.space_after = Pt(space)
-    if align:
-        p.alignment = align
-    return p
+def _add_bar_chart_to_slide(slide, cats, series_list, left=0.6, top=1.35, width=12.0, height=5.4):
+    cd = CategoryChartData()
+    cd.categories = [str(c)[:24] for c in cats]
+    for name, vals in series_list:
+        clean_vals = [0.0 if (v is None or pd.isna(v) or math.isinf(float(v))) else float(v) for v in vals]
+        cd.add_series(str(name), clean_vals)
+    chart_shape = slide.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(left), Inches(top), Inches(width), Inches(height), cd
+    )
+    chart = chart_shape.chart
+    chart.has_legend = len(series_list) > 1
+    if chart.has_legend:
+        chart.legend.position = XL_LEGEND_POSITION.TOP
+        chart.legend.include_in_layout = False
 
 
-def build_pptx(c):
-    brand = _rgb(c["brand"])
-    palette = [brand, _rgb("#E8833A"), _rgb("#4C9F70"), _rgb("#C0392B"), _rgb("#7F8C8D")]
-    white, grey = RGBColor(255, 255, 255), RGBColor(0x6B, 0x75, 0x80)
-    cur, k = c["cur"], c["k"]
-    m = lambda x: f"{cur}{x:,.0f}"
+def build_credit_ppt(df: pd.DataFrame, prio: pd.DataFrame, company: str, cur: str, rgb, ai_text: str) -> bytes:
     prs = Presentation()
-    prs.slide_width, prs.slide_height = Inches(13.333), Inches(7.5)
-    counter = [0]
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+    blank = prs.slide_layouts[6]
 
-    def new_slide(title):
-        s = prs.slides.add_slide(prs.slide_layouts[6])
-        counter[0] += 1
-        bar = s.shapes.add_shape(MSO_SHAPE.RECTANGLE, 0, 0, prs.slide_width, Inches(0.95))
-        bar.fill.solid()
-        bar.fill.fore_color.rgb = brand
-        bar.line.fill.background()
-        tb = s.shapes.add_textbox(Inches(0.5), Inches(0.12), Inches(12.3), Inches(0.75))
-        para(tb.text_frame, title, 28, True, white, first=True)
-        ft = s.shapes.add_textbox(Inches(0.5), Inches(7.05), Inches(12.3), Inches(0.35))
-        para(ft.text_frame, f"{c['company']}  |  Credit Recovery Review  |  As of {c['as_of']}  |  {counter[0]}",
-             10, False, grey, first=True)
-        return s
+    tot_out = df["outstanding"].sum()
+    tot_od = df["overdue_amt"].sum()
+    tot_due = df["total_due"].sum()
+    tot_coll = df["total_coll"].sum()
+    eff = (tot_coll / tot_due * 100) if tot_due > 0 else 0.0
+    od_acc = int((df["overdue_amt"] > 0).sum())
 
-    def kpi_card(s, label, value, x, y, w=3.9, h=1.2):
-        card = s.shapes.add_shape(MSO_SHAPE.ROUNDED_RECTANGLE, Inches(x), Inches(y), Inches(w), Inches(h))
-        card.fill.solid()
-        card.fill.fore_color.rgb = _rgb("#F2F5F9")
-        card.line.color.rgb = brand
-        tf = card.text_frame
-        tf.word_wrap = True
-        para(tf, value, 26, True, brand, first=True, space=0, align=PP_ALIGN.CENTER)
-        para(tf, label, 12, False, grey, space=0, align=PP_ALIGN.CENTER)
+    s1 = prs.slides.add_slide(blank)
+    _add_slide_header(s1, f"{company} — Credit Recovery Executive Summary", f"Report Date: {date.today()}", rgb)
+    summary_df = pd.DataFrame(
+        [
+            {"Metric": "Total Accounts", "Value": f"{len(df):,}"},
+            {"Metric": "Accounts with Overdue", "Value": f"{od_acc:,} ({od_acc/max(1,len(df))*100:.1f}%)"},
+            {"Metric": "Total Outstanding Portfolio", "Value": fmt_num(tot_out, cur)},
+            {"Metric": "Total Overdue Amount", "Value": fmt_num(tot_od, cur)},
+            {"Metric": "Total Cumulative Collection", "Value": fmt_num(tot_coll, cur)},
+            {"Metric": "Collection Efficiency", "Value": f"{eff:.1f}%"},
+        ]
+    )
+    _add_table_to_slide(s1, summary_df, top=1.4, max_rows=8)
 
-    def bullets(s, items, x, y, w, h, size=14):
-        tf = s.shapes.add_textbox(Inches(x), Inches(y), Inches(w), Inches(h)).text_frame
-        tf.word_wrap = True
-        for i, t in enumerate(items):
-            para(tf, "• " + t, size, first=(i == 0))
+    s2 = prs.slides.add_slide(blank)
+    _add_slide_header(s2, "Portfolio Aging by Due EMI Bucket", "Outstanding & Overdue by Bucket", rgb)
+    ag = (
+        df.groupby("bucket", as_index=False)
+        .agg(Accounts=("account_id", "count"), Outstanding=("outstanding", "sum"), Overdue=("overdue_amt", "sum"))
+    )
+    _add_bar_chart_to_slide(s2, ag["bucket"], [("Outstanding", ag["Outstanding"]), ("Overdue", ag["Overdue"])])
 
-    def chart(s, cats, series, x, y, w, h, title, fmt="#,##0"):
-        cd = CategoryChartData()
-        cd.categories = [str(i) for i in cats]
-        for name, vals in series.items():
-            cd.add_series(name, [None if pd.isna(v) else float(v) for v in vals])
-        ch = s.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(x), Inches(y),
-                                Inches(w), Inches(h), cd).chart
-        ch.has_title = True
-        ch.chart_title.text_frame.text = title
-        ch.chart_title.text_frame.paragraphs[0].runs[0].font.size = Pt(14)
-        ch.chart_title.text_frame.paragraphs[0].runs[0].font.bold = True
-        ch.has_legend = len(series) > 1
-        if ch.has_legend:
-            ch.legend.position = XL_LEGEND_POSITION.BOTTOM
-            ch.legend.include_in_layout = False
-        plot = ch.plots[0]
-        plot.has_data_labels = True
-        plot.data_labels.number_format = fmt
-        plot.data_labels.number_format_is_linked = False
-        plot.data_labels.font.size = Pt(9)
-        for i, ser in enumerate(plot.series):
-            ser.format.fill.solid()
-            ser.format.fill.fore_color.rgb = palette[i % len(palette)]
-        ch.category_axis.tick_labels.font.size = Pt(10)
-        ch.value_axis.tick_labels.font.size = Pt(10)
-        ch.value_axis.tick_labels.number_format = fmt
-        ch.value_axis.tick_labels.number_format_is_linked = False
+    s3 = prs.slides.add_slide(blank)
+    _add_slide_header(s3, "Branch-Wise Recovery Performance", "Top Branches by Overdue & Collection", rgb)
+    br = (
+        df.groupby("branch", as_index=False)
+        .agg(Accounts=("account_id", "count"), Outstanding=("outstanding", "sum"), Overdue=("overdue_amt", "sum"), Collected=("total_coll", "sum"))
+        .sort_values("Overdue", ascending=False)
+        .head(10)
+    )
+    _add_bar_chart_to_slide(s3, br["branch"], [("Overdue", br["Overdue"]), ("Collected", br["Collected"])])
 
-    def ppt_table(s, header, rows, x, y, w, widths, size=11, row_h=0.36):
-        t = s.shapes.add_table(len(rows) + 1, len(header), Inches(x), Inches(y), Inches(w),
-                               Inches(row_h * (len(rows) + 1))).table
-        for j, fr in enumerate(widths):
-            t.columns[j].width = Inches(w * fr)
-        for j, h_ in enumerate(header):
-            cell = t.cell(0, j)
-            cell.fill.solid()
-            cell.fill.fore_color.rgb = brand
-            cell.text_frame.clear()
-            para(cell.text_frame, str(h_), size, True, white, first=True, space=0)
-        for i, row in enumerate(rows, 1):
-            for j, v in enumerate(row):
-                cell = t.cell(i, j)
-                cell.text_frame.clear()
-                para(cell.text_frame, str(v), size, False, None, first=True, space=0)
+    s4 = prs.slides.add_slide(blank)
+    _add_slide_header(s4, "Collector-Wise Recovery Performance", "Overdue vs Collected (Top 10 Collectors)", rgb)
+    co = (
+        df.groupby("collector", as_index=False)
+        .agg(Accounts=("account_id", "count"), Overdue=("overdue_amt", "sum"), Collected=("total_coll", "sum"), Due=("total_due", "sum"))
+        .sort_values("Overdue", ascending=False)
+        .head(10)
+    )
+    _add_bar_chart_to_slide(s4, co["collector"], [("Overdue", co["Overdue"]), ("Collected", co["Collected"])])
 
-    aging, br, co = c["aging"], c["br"], c["co"]
+    s5 = prs.slides.add_slide(blank)
+    _add_slide_header(s5, "Portfolio Risk Status Classification", "Accounts & Exposure by Risk Tier", rgb)
+    rk = df.groupby("risk_status", as_index=False).agg(
+        Accounts=("account_id", "count"), Outstanding=("outstanding", "sum"), Overdue=("overdue_amt", "sum")
+    )
+    _add_table_to_slide(s5, rk, top=1.5, max_rows=10)
 
-    # 1 Executive summary
-    s = new_slide("Executive Summary")
-    cards = [("Total Outstanding", m(k["outstanding"])), ("Total Overdue", m(k["overdue"])),
-             ("Total Collection", m(k["collected"])), ("Collection Efficiency", pct(k["efficiency"])),
-             ("PAR3 (3+ EMI due)", pct(k["par3"])), ("Accounts / with overdue", f"{k['accounts']:,} / {k['od_accounts']:,}")]
-    for i, (lbl, val) in enumerate(cards):
-        r_, c_ = divmod(i, 3)
-        kpi_card(s, lbl, val, 0.5 + c_ * 4.2, 1.2 + r_ * 1.4)
-    bullets(s, c["insights"][:5], 0.5, 4.1, 12.3, 2.9, 13)
-    s.notes_slide.notes_text_frame.text = c["ai_text"] or "Rule-based insights shown on slide."
+    s6 = prs.slides.add_slide(blank)
+    _add_slide_header(s6, "Top Priority Accounts for Immediate Recovery", "Ranked by Multi-Factor Risk Score (0-100)", rgb)
+    if not prio.empty:
+        cols_show = ["rank", "account_id", "customer", "vehicle_reg", "branch", "collector", "due_emi_no", "overdue_amt", "score"]
+        _add_table_to_slide(s6, prio[cols_show], top=1.3, max_rows=10)
 
-    # 2 Portfolio overview
-    s = new_slide("Portfolio Overview")
-    chart(s, aging.index, {"Accounts": aging.accounts}, 0.5, 1.2, 6.4, 5.7, "Accounts by Due-EMI bucket")
-    rows = [("Bill amount (portfolio)", m(k["bill"])), ("Total outstanding", m(k["outstanding"])),
-            ("Total due to date", m(k["total_due"])), ("Total collection", m(k["collected"])),
-            ("Overdue amount", m(k["overdue"])), ("Accounts", f"{k['accounts']:,}"),
-            ("Accounts with overdue", f"{k['od_accounts']:,}"), ("Interest", m(k["interest"])),
-            ("Last-month collection", m(k["last_month"])), ("Monthly EMI demand", m(k["demand"]))]
-    ppt_table(s, ["Metric", "Value"], rows, 7.2, 1.3, 5.6, [0.6, 0.4], 12, 0.42)
-
-    # 3 Outstanding & overdue
-    s = new_slide("Outstanding & Overdue Analysis")
-    chart(s, aging.index, {"Outstanding": aging.outstanding, "Overdue": aging.overdue},
-          0.5, 1.2, 7.6, 5.7, "Outstanding and overdue by Due-EMI bucket")
-    b3 = [f"Overdue is {pct(k['overdue_pct'])} of outstanding ({m(k['overdue'])}).",
-          f"PAR1 {pct(k['par1'])} | PAR2 {pct(k['par2'])} | PAR3 {pct(k['par3'])}."]
-    od_b = aging.loc[BUCKETS[1:], "overdue"]
-    if od_b.sum() > 0:
-        b3.append(f"Largest overdue balance sits in the '{od_b.idxmax()}' bucket ({m(od_b.max())}).")
-    if c["mom"]:
-        mo = c["mom"]
-        b3 += [f"Outstanding moved {mo['d_out']:+,.0f} and overdue {mo['d_od']:+,.0f} versus the previous file.",
-               f"{mo['higher']:,} accounts moved to a higher bucket; {mo['lower']:,} improved."]
-    bullets(s, b3, 8.3, 1.4, 4.6, 5.0, 14)
-
-    # 4 Collection efficiency
-    s = new_slide("Collection Efficiency")
-    chart(s, ["Total due", "Total collection", "Overdue"],
-          {"Amount": [k["total_due"], k["collected"], k["overdue"]]}, 0.5, 1.2, 5.8, 4.6, "Due vs collected")
-    chart(s, aging.index, {"Efficiency": aging.efficiency}, 6.6, 1.2, 6.2, 4.6,
-          "Collection efficiency by Due-EMI bucket", "0.0%")
-    bullets(s, [f"Collection efficiency = Total Collection ÷ Total due amount = {pct(k['efficiency'])}.",
-                f"Last-month collection {m(k['last_month'])} is {pct(k['lm_ratio'], 0)} of the monthly EMI demand."],
-            0.5, 6.0, 12.3, 1.0, 13)
-
-    # 5 Branch
-    s = new_slide("Branch Performance")
-    b = br.head(8)
-    chart(s, b.index, {"Overdue": b.overdue}, 0.5, 1.2, 6.1, 5.7, "Overdue amount by branch (top 8)")
-    chart(s, b.index, {"Efficiency": b.efficiency}, 6.8, 1.2, 6.1, 5.7, "Collection efficiency by branch", "0.0%")
-
-    # 6 Collector
-    s = new_slide("Collector Performance")
-    cc = co.head(8)
-    chart(s, cc.index, {"Overdue": cc.overdue}, 0.5, 1.2, 6.1, 5.7, "Overdue amount by collector (top 8)")
-    tg = c["targets"]
-    if tg is not None:
-        t8 = tg[tg.Target > 0].sort_values("Achievement %", ascending=False).head(10)
-        chart(s, t8.Collector, {"Achievement": t8["Achievement %"]}, 6.8, 1.2, 6.1, 5.7,
-              "Target achievement by collector", "0%")
-    else:
-        chart(s, cc.index, {"Efficiency": cc.efficiency}, 6.8, 1.2, 6.1, 5.7,
-              "Collection efficiency by collector", "0.0%")
-
-    # 7 Vehicle model
-    s = new_slide("Vehicle Model Analysis")
-    if c["vm"] is not None:
-        v = c["vm"].head(8)
-        chart(s, v.index, {"Overdue": v.overdue}, 0.5, 1.2, 6.1, 5.7, "Overdue by vehicle model (top 8)")
-        chart(s, v.index, {"Efficiency": v.efficiency}, 6.8, 1.2, 6.1, 5.7, "Collection efficiency by model", "0.0%")
-    else:
-        bullets(s, ["Vehicle-model analysis is unavailable: the uploaded Excel has no Vehicle Model column.",
-                    "Add a model column (or map an existing one in the app) and regenerate this deck."],
-                0.8, 2.0, 11.5, 3.0, 18)
-
-    # 8 Roll-rate
-    s = new_slide("Roll-Rate Analysis")
-    if c["roll"] is not None:
-        rate = c["roll"]["rate"]
-        hdr = ["Opening \\ Closing"] + [str(x) for x in rate.columns]
-        rows = [[i] + ["–" if pd.isna(v) else f"{v:.0%}" for v in rate.loc[i]] for i in rate.index]
-        ppt_table(s, hdr, rows, 0.5, 1.3, 12.3, [0.17] + [0.1186] * 7, 12, 0.5)
-        sm = c["roll"]["summary"]
-        tot_open, tot_hi = sm["Opening accounts"].sum(), sm["Rolled to higher bucket"].sum()
-        bullets(s, [f"Overall, {pct(div(tot_hi, tot_open))} of opening accounts rolled into a higher bucket.",
-                    "Rows = opening bucket (previous file); columns = closing bucket (current file); "
-                    "accounts matched on Account Id."], 0.5, 5.2, 12.3, 1.6, 13)
-    else:
-        bullets(s, ["Roll-rate analysis needs both the current and previous month files. "
-                    "Upload the previous month Excel to populate this slide."], 0.8, 2.0, 11.5, 2.0, 18)
-
-    # 9 High-risk & provisioning
-    s = new_slide("High-Risk Accounts & Provisioning")
-    pr = c["prio"]
-    if len(pr):
-        rows = [(r.rank, str(r.customer)[:22], str(r.branch)[:14], f"{r.due_emi_no:g}",
-                 m(r.overdue_amt), f"{r.score:.0f}") for r in pr.head(8).itertuples()]
-        ppt_table(s, ["#", "Customer", "Branch", "Due EMI", "Overdue", "Score"], rows, 0.4, 1.3, 7.5,
-                  [0.07, 0.31, 0.21, 0.13, 0.18, 0.1], 11, 0.42)
-    pv = c["prov"]
-    rows = [(i, m(r.outstanding), f"{r.rate_pct:.0f}%", m(r.provision)) for i, r in pv.iterrows()]
-    rows.append(("Total", m(pv.outstanding.sum()), "", m(pv.provision.sum())))
-    ppt_table(s, ["Bucket", "Outstanding", "Rate", "Provision"], rows, 8.1, 1.3, 4.8, [0.28, 0.28, 0.14, 0.3], 11, 0.42)
-    w = c["weights"]
-    bullets(s, ["Provisions are a MANAGEMENT ESTIMATE, not an official accounting provision.",
-                f"Priority score weights - overdue {w['overdue']:.0%}, due EMI {w['due_emi']:.0%}, "
-                f"down payment {w['down_payment']:.0%}, outstanding {w['outstanding']:.0%}."],
-            0.4, 5.2, 12.5, 1.6, 12)
-
-    # 10 Recommendations
-    s = new_slide("Recommendations & Action Plan")
-    rows = [(i, a, t) for i, (a, t) in enumerate(c["recs"][:7], 1)]
-    ppt_table(s, ["#", "Recommended action", "Suggested timing"], rows, 0.5, 1.3, 12.3, [0.05, 0.75, 0.2], 12, 0.62)
-    notes = "\n\n".join(x for x in (c["ai_text"], c["pdf_notes"]) if x)
-    if notes:
-        s.notes_slide.notes_text_frame.text = notes
+    s7 = prs.slides.add_slide(blank)
+    _add_slide_header(s7, "Executive Insights & Action Plan", "AI-Assisted Management Commentary", rgb)
+    tb = s7.shapes.add_textbox(Inches(0.6), Inches(1.3), Inches(12.1), Inches(5.6))
+    tf = tb.text_frame
+    tf.word_wrap = True
+    for idx, line in enumerate(ai_text.splitlines()[:18]):
+        clean_line = line.replace("###", "").replace("**", "").strip()
+        if not clean_line:
+            continue
+        p = tf.paragraphs[0] if idx == 0 else tf.add_paragraph()
+        p.text = clean_line
+        p.font.size = Pt(12)
 
     buf = io.BytesIO()
     prs.save(buf)
     return buf.getvalue()
 
 
-def build_excel(sheets):
+def build_universal_ppt(df: pd.DataFrame, company: str, cat_col: str, num_col: str, rgb, ai_text: str) -> bytes:
+    prs = Presentation()
+    prs.slide_width = Inches(13.333)
+    prs.slide_height = Inches(7.5)
+    blank = prs.slide_layouts[6]
+
+    s1 = prs.slides.add_slide(blank)
+    _add_slide_header(s1, f"{company} — Executive Data Analysis Report", f"Generated on {date.today()}", rgb)
+    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    kpi_rows = [{"Metric": "Total Clean Records", "Value": f"{len(df):,}"}, {"Metric": "Total Columns Analyzed", "Value": f"{df.shape[1]}"}]
+    for nc in num_cols[:5]:
+        kpi_rows.append({"Metric": f"Total {nc}", "Value": f"{df[nc].sum():,.2f}"})
+        kpi_rows.append({"Metric": f"Average {nc}", "Value": f"{df[nc].mean():,.2f}"})
+    _add_table_to_slide(s1, pd.DataFrame(kpi_rows), top=1.4, max_rows=10)
+
+    if cat_col and num_col and cat_col in df.columns and num_col in df.columns:
+        s2 = prs.slides.add_slide(blank)
+        _add_slide_header(s2, f"{num_col} by {cat_col}", "Top 10 Breakdown", rgb)
+        grp = (
+            df.groupby(cat_col, as_index=False)[num_col]
+            .sum()
+            .sort_values(num_col, ascending=False)
+            .head(10)
+        )
+        _add_bar_chart_to_slide(s2, grp[cat_col], [(num_col, grp[num_col])])
+
+        s3 = prs.slides.add_slide(blank)
+        _add_slide_header(s3, f"Detailed Summary by {cat_col}", f"Count, Sum & Average of {num_col}", rgb)
+        grp_tbl = (
+            df.groupby(cat_col, as_index=False)
+            .agg(Records=(num_col, "count"), Total=(num_col, "sum"), Average=(num_col, "mean"))
+            .sort_values("Total", ascending=False)
+        )
+        _add_table_to_slide(s3, grp_tbl, top=1.4, max_rows=11)
+
+    s4 = prs.slides.add_slide(blank)
+    _add_slide_header(s4, "Executive Commentary & Recommendations", "Automated Intelligence", rgb)
+    tb = s4.shapes.add_textbox(Inches(0.6), Inches(1.3), Inches(12.1), Inches(5.6))
+    tf = tb.text_frame
+    tf.word_wrap = True
+    for idx, line in enumerate(ai_text.splitlines()[:18]):
+        clean_line = line.replace("###", "").replace("**", "").strip()
+        if not clean_line:
+            continue
+        p = tf.paragraphs[0] if idx == 0 else tf.add_paragraph()
+        p.text = clean_line
+        p.font.size = Pt(12)
+
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        for name, (d, idx) in sheets.items():
-            d.to_excel(w, sheet_name=name[:31], index=idx)
-        for ws in w.book.worksheets:
-            for col in ws.columns:
-                width = max((len(str(x.value)) for x in col[:200] if x.value is not None), default=8)
-                ws.column_dimensions[col[0].column_letter].width = min(max(10, width + 2), 45)
-            for cell in ws[1]:
-                cell.font = cell.font.copy(bold=True)
+    prs.save(buf)
     return buf.getvalue()
 
 
-# ======================================================================
-# UI helpers
-# ======================================================================
-_ids = itertools.count()
+def build_multi_sheet_excel(sheets_dict: dict) -> bytes:
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        for name, d in sheets_dict.items():
+            safe_name = re.sub(r"[\[\]\*:/\?\\]", "", str(name))[:31] or "Sheet"
+            d.to_excel(writer, sheet_name=safe_name, index=False)
+    return buf.getvalue()
 
 
-def plot(fig):
-    key = f"pc{next(_ids)}"
-    try:
-        st.plotly_chart(fig, use_container_width=True, key=key)
-    except TypeError:  # future Streamlit versions
-        st.plotly_chart(fig, width="stretch", key=key)
+st.sidebar.markdown("## 🚀 AI Analytics Studio")
+service_mode = st.sidebar.radio(
+    "Select Service Mode",
+    [
+        "1️⃣ Universal Messy Data Cleaner & AI Analytics",
+        "2️⃣ Credit Recovery Intelligence Pro",
+    ],
+)
 
+company_name = st.sidebar.text_input("Company / Client Name", value="Uttara Motors Limited")
+brand_color = st.sidebar.color_picker("Brand Theme Colour", value="#1F3A5F")
+currency_sym = st.sidebar.text_input("Currency Symbol", value="BDT")
+safe_table_mode = st.sidebar.checkbox(
+    "Firewall-safe table mode (prevents TypeError)",
+    value=True,
+    help="Keep checked on office networks to avoid red DataFrame.js TypeError boxes.",
+)
 
-def show_df(d, fmt=None, style=True, **kw):
-    try:
-        if style:
-            f = {c: s for c, s in {**FMT, **(fmt or {})}.items() if c in d.columns}
-            d = d.style.format(f, na_rep="–")
-        st.dataframe(d, use_container_width=True, **kw)
-    except TypeError:
-        st.dataframe(d, width="stretch", **kw)
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 📂 1. Load Data")
+demo_choice = st.sidebar.selectbox(
+    "Quick Demo Dataset (for testing / Fiverr portfolio)",
+    ["-- Upload My Own File --", "Demo 1: Vehicle Credit Recovery Data", "Demo 2: Messy Business Sales Data"],
+)
 
+uploaded_file = st.sidebar.file_uploader("Upload Excel, CSV, or PDF", type=["xlsx", "xls", "csv", "pdf"])
 
-def style_fig(fig, title=None, h=380):
-    fig.update_layout(template="plotly_white", colorway=[brand, "#E8833A", "#4C9F70", "#C0392B", "#7F8C8D"],
-                      title=title, height=h, margin=dict(l=10, r=10, t=55, b=10),
-                      legend=dict(orientation="h", y=1.12, x=0))
-    return fig
+raw_df = None
+pdf_text = ""
 
+if demo_choice == "Demo 1: Vehicle Credit Recovery Data":
+    raw_df = make_sample_credit_df()
+elif demo_choice == "Demo 2: Messy Business Sales Data":
+    raw_df = make_sample_messy_business_df()
+elif uploaded_file is not None:
+    fname = uploaded_file.name.lower()
+    if fname.endswith(".csv"):
+        raw_df = pd.read_csv(uploaded_file)
+    elif fname.endswith((".xlsx", ".xls")):
+        xl = pd.ExcelFile(uploaded_file)
+        sheet = st.sidebar.selectbox("Excel Sheet", xl.sheet_names)
+        preview = xl.parse(sheet, header=None)
+        auto_hdr = detect_best_header_row(preview)
+        hdr_row = st.sidebar.number_input("Header Row (1-based)", min_value=1, max_value=max(1, len(preview)), value=auto_hdr + 1)
+        raw_df = xl.parse(sheet, header=int(hdr_row - 1))
+    elif fname.endswith(".pdf"):
+        tables = []
+        with pdfplumber.open(uploaded_file) as pdf:
+            for p in pdf.pages:
+                pdf_text += (p.extract_text() or "") + "\n"
+                for t in p.extract_tables() or []:
+                    if len(t) > 1:
+                        tables.append(pd.DataFrame(t[1:], columns=t[0]))
+        if tables:
+            raw_df = pd.concat(tables, ignore_index=True)
 
-def grouped_bar(tbl, cols, labels, title, top=15):
-    t = tbl.head(top)
-    fig = go.Figure([go.Bar(name=lb, x=t.index.astype(str), y=t[c_]) for c_, lb in zip(cols, labels)])
-    fig.update_layout(barmode="group")
-    return style_fig(fig, title)
+st.markdown(
+    f"""
+    <div class="hero-box" style="background: linear-gradient(135deg, {brand_color}, #0F172A);">
+        <h2 style="margin:0; color:white;">{company_name} — AI Data & Credit Intelligence Studio</h2>
+        <p style="margin:0.3rem 0 0 0; opacity:0.9;">
+            Automated Messy Data Cleaning • Executive Business Analytics • Credit Recovery Intelligence • 1-Click PPT & Excel Builder
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-
-# ======================================================================
-# SIDEBAR
-# ======================================================================
-st.sidebar.markdown("## 💳 Credit Recovery Intelligence")
-company = st.sidebar.text_input("Company / report name", "Your Company")
-brand = st.sidebar.color_picker("Brand colour", "#1F3A5F")
-cur = st.sidebar.text_input("Currency symbol (optional)", "")
-as_of = st.sidebar.date_input("Report date", date.today())
-m_ = lambda x: f"{cur}{x:,.0f}"
-
-st.markdown(f"""<style>
-.block-container{{padding-top:1.2rem}}
-.banner{{background:{brand};color:#fff;padding:16px 24px;border-radius:10px;margin-bottom:14px}}
-.banner h2{{margin:0;color:#fff}} .banner p{{margin:2px 0 0;opacity:.85}}
-div[data-testid="stMetric"]{{background:#fff;border:1px solid #e3e7ec;border-left:5px solid {brand};
-padding:10px 14px;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.05)}}
-</style>""", unsafe_allow_html=True)
-
-st.sidebar.subheader("1 · Upload")
-f_cur = st.sidebar.file_uploader("Current month Excel", type=["xlsx", "xls"])
-f_prev = st.sidebar.file_uploader("Previous month Excel (optional)", type=["xlsx", "xls"])
-f_pdf = st.sidebar.file_uploader("PDF report / policy (optional)", type=["pdf"])
-
-if not f_cur:
-    st.markdown(f"<div class='banner'><h2>{company} · Credit Recovery Dashboard</h2>"
-                "<p>Upload the current month Excel file in the sidebar to begin.</p></div>", unsafe_allow_html=True)
-    st.write("**Expected columns:**", ", ".join(v for k_, v in FIELDS.items() if k_ != "vehicle_model"),
-             "(optional: Vehicle Model)")
+if raw_df is None:
+    st.info(
+        "👈 **Get Started:** Upload any Excel/CSV/PDF file in the left sidebar, or select a **Quick Demo Dataset** to test the platform immediately."
+    )
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown("#### 🧹 Auto Messy Data Cleaner\nFixes broken headers, removes subtotal/duplicate rows, strips currency text (`BDT 12,000/-`), and exports clean Excel.")
+    with c2:
+        st.markdown("#### 📊 AI Business Analytics\nAutomatically detects categories, metrics, and dates to generate interactive charts, Pareto tables, and PPT slides.")
+    with c3:
+        st.markdown("#### 💳 Credit Recovery Pro\nEMI aging buckets, PAR analysis, collector efficiency, 0–100 recovery priority scoring, and executive presentations.")
     st.stop()
 
 
-def sheet_controls(label, file, key):
-    fb = file.getvalue()
-    sheet = st.sidebar.selectbox(f"{label} – sheet", get_sheets(fb), key=f"sheet_{key}")
-    auto = detect_header_row(fb, sheet)
-    hdr = st.sidebar.number_input(f"{label} – header row (auto-detected)", 1, 50, auto,
-                                  key=f"hdr_{key}_{file.name}_{sheet}")
-    return fb, sheet, int(hdr)
+if service_mode.startswith("1️⃣"):
+    st.sidebar.markdown("### 🧹 2. Cleaning Rules")
+    drop_tot = st.sidebar.checkbox("Remove embedded Total/Subtotal rows", value=True)
+    drop_dup = st.sidebar.checkbox("Remove exact duplicate rows", value=True)
+    std_txt = st.sidebar.checkbox("Trim spaces & standardize category case", value=True)
+    num_pol = st.sidebar.selectbox("Missing Numeric Values", ["Keep as NaN (transparent)", "Fill with 0", "Fill with Column Median"])
+    txt_pol = st.sidebar.selectbox("Missing Text Values", ["Fill with 'Unknown'", "Keep as blank"])
 
+    clean_df, audit_log = auto_clean_dataframe(raw_df, drop_tot, drop_dup, std_txt, num_pol, txt_pol)
 
-fb, sheet, hdr = sheet_controls("Current", f_cur, "cur")
-try:
-    raw = load_sheet(fb, sheet, hdr)
-except Exception as e:
-    st.error(f"Could not read the sheet: {e}")
-    st.stop()
+    num_cols = clean_df.select_dtypes(include=[np.number]).columns.tolist()
+    cat_cols = [c for c in clean_df.columns if c not in num_cols]
 
-detected = auto_map(raw.columns)
-st.sidebar.caption(f"Auto-detected {len(detected)} of {len(FIELDS)} columns.")
-mapping = {}
-with st.sidebar.expander("Column mapping (check / change)"):
-    opts = [NONE] + list(raw.columns)
-    for key, label in FIELDS.items():
-        idx = opts.index(detected[key]) if key in detected else 0
-        sel = st.selectbox(label, opts, index=idx, key=f"map_{f_cur.name}_{sheet}_{hdr}_{key}")
-        mapping[key] = None if sel == NONE else sel
+    t_clean, t_dash, t_anom, t_export = st.tabs(
+        ["🧹 1. Auto Data Cleaner (Before vs After)", "📊 2. Executive Business Dashboard", "🔍 3. Pivot & Anomaly Finder", "📥 4. AI Report, PPT & Excel Export"]
+    )
 
+    with t_clean:
+        m1, m2, m3, m4 = st.columns(4)
+        m1.markdown(f'<div class="kpi-card"><div class="kpi-title">Raw Rows</div><div class="kpi-val">{len(raw_df):,}</div></div>', unsafe_allow_html=True)
+        m2.markdown(f'<div class="kpi-card"><div class="kpi-title">Clean Rows</div><div class="kpi-val">{len(clean_df):,}</div></div>', unsafe_allow_html=True)
+        m3.markdown(f'<div class="kpi-card"><div class="kpi-title">Numeric Columns</div><div class="kpi-val">{len(num_cols)}</div></div>', unsafe_allow_html=True)
+        m4.markdown(f'<div class="kpi-card"><div class="kpi-title">Category/Text Columns</div><div class="kpi-val">{len(cat_cols)}</div></div>', unsafe_allow_html=True)
 
-def missing_fields(mp):
-    miss = []
-    if not mp.get("customer"):
-        miss.append("Customer Name")
-    if not mp.get("account"):
-        miss.append("Account Id")
-    if not (mp.get("net_balance") or mp.get("balance_receivable")):
-        miss.append("Net balance or Balance receivable")
-    if not (mp.get("overdue_amt") or (mp.get("total_due") and mp.get("total_coll"))):
-        miss.append("Overdue amount (or Total due amount + Total Collection)")
-    if not (mp.get("due_emi_no") or (mp.get("inst_due_no") and mp.get("emi_coll_no")) or mp.get("emi")):
-        miss.append("Due EMI Number (or Installment due + EMI Collection number, or EMI)")
-    return miss
+        st.markdown("#### ✅ Automated Cleaning Audit Log")
+        for item in audit_log:
+            st.markdown(f'<div class="insight-box">✔️ {item}</div>', unsafe_allow_html=True)
 
+        col_b, col_a = st.columns(2)
+        with col_b:
+            st.markdown("##### Before Cleaning (Raw Preview)")
+            show_table(raw_df, safe_table_mode, 25)
+        with col_a:
+            st.markdown("##### After Cleaning (Fixed & Standardized)")
+            show_table(clean_df, safe_table_mode, 25)
 
-miss = missing_fields(mapping)
-if miss:
-    st.error("Please map these columns in the sidebar: " + "; ".join(miss))
-    st.stop()
-
-st.sidebar.subheader("2 · Settings")
-basis_opts = [n for n, k_ in [("Net balance", "net_balance"), ("Balance receivable", "balance_receivable")]
-              if mapping[k_]]
-basis = st.sidebar.radio("Outstanding =", basis_opts)
-rounding = st.sidebar.radio("Fractional Due EMI", ["Round up (conservative)", "Round down"],
-                            help="Used only to place accounts in buckets. Raw values are kept.")
-dedupe = st.sidebar.checkbox("Remove duplicate Account Ids (keep first)", True)
-
-cur_all, Q = prepare(raw, mapping, basis, rounding, dedupe)
-if cur_all.empty:
-    st.error("No valid rows remain after cleaning. Check the header row and column mapping.")
-    st.stop()
-
-# ---- previous month ----
-prev_all = None
-if f_prev:
-    fbp, shp, hp = sheet_controls("Previous", f_prev, "prev")
-    try:
-        raw_p = load_sheet(fbp, shp, hp)
-        mp = {k_: v for k_, v in auto_map(raw_p.columns).items()}
-        for k_, v in mapping.items():  # reuse the current mapping when the header exists
-            if v and v in raw_p.columns:
-                mp[k_] = v
-        mp = {k_: mp.get(k_) for k_ in FIELDS}
-        pm = missing_fields(mp)
-        if pm or not mp.get("net_balance" if basis == "Net balance" else "balance_receivable"):
-            st.sidebar.error("Previous file: missing " + "; ".join(pm or [basis]))
+    with t_dash:
+        if not num_cols:
+            st.warning("No numeric columns detected yet. Check your header row in the sidebar.")
         else:
-            prev_all, Qp = prepare(raw_p, mp, basis, rounding, dedupe)
-    except Exception as e:
-        st.sidebar.error(f"Previous file could not be read: {e}")
+            c_sel1, c_sel2 = st.columns(2)
+            primary_cat = c_sel1.selectbox("Select Primary Category (e.g., Branch, Region, Product, Collector)", cat_cols if cat_cols else clean_df.columns)
+            primary_num = c_sel2.selectbox("Select Primary Metric (e.g., Revenue, Overdue, Balance, Profit)", num_cols)
 
-# ---- filters ----
-st.sidebar.subheader("3 · Filters")
-branches = sorted(cur_all.branch.unique())
-sel_b = st.sidebar.multiselect("Branch", branches, default=branches)
-collectors = sorted(cur_all[cur_all.branch.isin(sel_b)].collector.unique())
-sel_c = st.sidebar.multiselect("Collector", collectors, default=collectors)
-mask = cur_all.branch.isin(sel_b) & cur_all.collector.isin(sel_c)
-has_model = Q["mapped"]["vehicle_model"]
-if has_model:
-    models = sorted(cur_all.vehicle_model.unique())
-    sel_m = st.sidebar.multiselect("Vehicle model", models, default=models)
-    mask &= cur_all.vehicle_model.isin(sel_m)
-sel_bk = st.sidebar.multiselect("Due EMI bucket", BUCKETS, default=BUCKETS)
-mask &= cur_all.bucket.isin(sel_bk)
-period_txt = "all EMI dates"
-dts = cur_all.emi_date_dt.dropna()
-if len(dts) > 0.5 * len(cur_all):
-    if st.sidebar.checkbox("Reporting period (filter by EMI Date)"):
-        rng = st.sidebar.date_input("EMI Date range", (dts.min().date(), dts.max().date()))
-        if isinstance(rng, tuple) and len(rng) == 2:
-            mask &= cur_all.emi_date_dt.between(pd.Timestamp(rng[0]), pd.Timestamp(rng[1]))
-            period_txt = f"{rng[0]} to {rng[1]}"
-df = cur_all[mask]
-if df.empty:
-    st.warning("No accounts match the selected filters.")
-    st.stop()
+            total_val = clean_df[primary_num].sum()
+            avg_val = clean_df[primary_num].mean()
+            med_val = clean_df[primary_num].median()
+            max_val = clean_df[primary_num].max()
 
-# ======================================================================
-# COMPUTE
-# ======================================================================
-k = kpis(df)
-aging = perf(df, "bucket", False)
-br, co, sp = perf(df, "branch"), perf(df, "collector"), perf(df, "sales_person")
-vm = perf(df, "vehicle_model") if has_model else None
-risk_t = perf(df, "risk", False)
-top_df = df[df.overdue_amt > 0].nlargest(15, "overdue_amt")
-top10_share = div(df.nlargest(10, "overdue_amt").overdue_amt.sum(), k["overdue"])
+            k1, k2, k3, k4 = st.columns(4)
+            k1.markdown(f'<div class="kpi-card"><div class="kpi-title">Total {primary_num}</div><div class="kpi-val">{fmt_num(total_val, currency_sym)}</div></div>', unsafe_allow_html=True)
+            k2.markdown(f'<div class="kpi-card"><div class="kpi-title">Average {primary_num}</div><div class="kpi-val">{fmt_num(avg_val, currency_sym, 1)}</div></div>', unsafe_allow_html=True)
+            k3.markdown(f'<div class="kpi-card"><div class="kpi-title">Median {primary_num}</div><div class="kpi-val">{fmt_num(med_val, currency_sym, 1)}</div></div>', unsafe_allow_html=True)
+            k4.markdown(f'<div class="kpi-card"><div class="kpi-title">Maximum {primary_num}</div><div class="kpi-val">{fmt_num(max_val, currency_sym)}</div></div>', unsafe_allow_html=True)
 
-mom_sum = mv = roll = None
-if prev_all is not None:
-    kc, kp = kpis(cur_all), kpis(prev_all)
-    mv = mom_accounts(cur_all, prev_all)
-    roll = roll_matrix(cur_all, prev_all)
-    vc = mv.movement.value_counts()
-    mom_sum = dict(d_out=kc["outstanding"] - kp["outstanding"], d_od=kc["overdue"] - kp["overdue"],
-                   d_eff=(kc["efficiency"] - kp["efficiency"]) if pd.notna(kc["efficiency"]) and pd.notna(kp["efficiency"]) else 0,
-                   higher=int(vc.get("Moved to higher bucket", 0)), lower=int(vc.get("Moved to lower bucket", 0)),
-                   new=int(vc.get("New account", 0)), closed=int(vc.get("Closed / not in current file", 0)))
+            grp = (
+                clean_df.groupby(primary_cat, as_index=False)
+                .agg(Records=(primary_num, "count"), Total=(primary_num, "sum"), Average=(primary_num, "mean"))
+                .sort_values("Total", ascending=False)
+            )
+            grp["Share %"] = (grp["Total"] / max(1e-9, grp["Total"].sum()) * 100).round(1)
 
-insights = make_insights(k, br, co, cur, top10_share, mom_sum)
-recs = make_recs(k, br, co, cur, mom_sum)
+            ch1, ch2 = st.columns(2)
+            with ch1:
+                fig_bar = px.bar(grp.head(15), x=primary_cat, y="Total", text="Share %", title=f"Top {primary_cat} by {primary_num}", color_discrete_sequence=[brand_color])
+                st.plotly_chart(fig_bar, use_container_width=True)
+            with ch2:
+                fig_pie = px.pie(grp.head(10), names=primary_cat, values="Total", hole=0.45, title=f"Share Distribution ({primary_cat})")
+                st.plotly_chart(fig_pie, use_container_width=True)
 
-st.markdown(f"<div class='banner'><h2>{company} · Credit Recovery Dashboard</h2>"
-            f"<p>As of {as_of} · {len(df):,} of {len(cur_all):,} accounts shown · "
-            f"Outstanding basis: {basis} · Period: {period_txt}</p></div>", unsafe_allow_html=True)
+            st.markdown(f"#### 📋 Summary Table by {primary_cat}")
+            show_table(grp, safe_table_mode, 50)
 
-tabs = st.tabs(["📊 Dashboard", "📈 Month-over-Month", "🔁 Roll-Rate", "🎯 Collector Targets",
-                "🧮 Provisioning", "🚨 Recovery Priority", "✅ Data Quality", "📄 PDF", "📑 Reports & AI"])
-t_dash, t_mom, t_roll, t_tar, t_prov, t_pri, t_dq, t_pdf, t_rep = tabs
-
-# ======================================================================
-# DASHBOARD
-# ======================================================================
-with t_dash:
-    c1 = st.columns(6)
-    c1[0].metric("Total Outstanding", m_(k["outstanding"]))
-    c1[1].metric("Total Overdue", m_(k["overdue"]), pct(k["overdue_pct"]) + " of outstanding", delta_color="inverse")
-    c1[2].metric("Total Collection", m_(k["collected"]))
-    c1[3].metric("Collection Efficiency", pct(k["efficiency"]))
-    c1[4].metric("Total Accounts", f"{k['accounts']:,}")
-    c1[5].metric("Accounts with Overdue", f"{k['od_accounts']:,}",
-                 pct(div(k["od_accounts"], k["accounts"]), 0) + " of accounts", delta_color="inverse")
-    c2 = st.columns(5)
-    c2[0].metric("PAR1 (1+ EMI)", pct(k["par1"]))
-    c2[1].metric("PAR2 (2+ EMI)", pct(k["par2"]))
-    c2[2].metric("PAR3 (3+ EMI)", pct(k["par3"]), f"{k['par3_accts']:,} accounts", delta_color="inverse")
-    c2[3].metric("Last-month Collection", m_(k["last_month"]), pct(k["lm_ratio"], 0) + " of EMI demand", delta_color="off")
-    c2[4].metric("Interest", m_(k["interest"]))
-
-    t = aging.reset_index()
-    t["bucket"] = t.bucket.astype(str)
-    a, b = st.columns(2)
-    with a:
-        plot(style_fig(px.bar(t, x="bucket", y="accounts", text_auto=True), "Due EMI distribution - accounts"))
-    with b:
-        plot(style_fig(px.bar(t, x="bucket", y=["outstanding", "overdue"], barmode="group", text_auto=".3s"),
-                       "Outstanding and overdue by Due EMI bucket"))
-
-    st.subheader("Branch-wise collection")
-    a, b = st.columns(2)
-    with a:
-        plot(grouped_bar(br, ["total_due", "collected"], ["Total due", "Collected"], "Due vs collected (top 15 by overdue)"))
-    with b:
-        e = br[br.total_due > 0].sort_values("efficiency")
-        plot(style_fig(px.bar(e.reset_index(), x="efficiency", y="branch", orientation="h", text_auto=".1%"),
-                       "Collection efficiency by branch"))
-    show_df(br)
-
-    st.subheader("Collector-wise performance")
-    a, b = st.columns(2)
-    with a:
-        e = co[co.total_due > 0].sort_values("efficiency").tail(25)
-        plot(style_fig(px.bar(e.reset_index(), x="efficiency", y="collector", orientation="h", text_auto=".1%"),
-                       "Collection efficiency by collector", 460))
-    with b:
-        plot(grouped_bar(co, ["overdue", "collected"], ["Overdue", "Collected"], "Overdue vs collected (top 15)"))
-    show_df(co)
-
-    st.subheader("Vehicle model-wise recovery")
-    if vm is not None:
-        a, b = st.columns(2)
-        with a:
-            plot(grouped_bar(vm, ["total_due", "collected"], ["Total due", "Collected"], "Due vs collected by model"))
-        with b:
-            plot(style_fig(px.bar(vm.reset_index(), x="vehicle_model", y="efficiency", text_auto=".1%"),
-                           "Collection efficiency by model"))
-        show_df(vm)
-    else:
-        st.info("Your file has no Vehicle Model column, so this analysis is unavailable. "
-                "Map a model column under 'Column mapping' if one exists.")
-
-    st.subheader("Risk status (overdue-wise)")
-    st.caption("Management classification by Due EMI count: Regular = 0, Low = 1, Medium = 2, High = 3-5, Critical = 6+.")
-    a, b = st.columns(2)
-    rt = risk_t.reset_index()
-    rt["risk"] = rt.risk.astype(str)
-    with a:
-        plot(style_fig(px.bar(rt, x="risk", y="overdue", color="risk", color_discrete_map=RISK_COLORS,
-                              text_auto=".3s"), "Overdue amount by risk status"))
-    with b:
-        plot(style_fig(px.pie(rt, names="risk", values="outstanding", color="risk",
-                              color_discrete_map=RISK_COLORS, hole=0.45), "Outstanding by risk status"))
-    show_df(risk_t)
-
-    st.subheader("Key insights")
-    for i in insights:
-        st.write("•", i)
-    st.subheader("Recommended actions")
-    for a_, t_ in recs:
-        st.write(f"• {a_} *({t_})*")
-    with st.expander("How the metrics are calculated"):
-        st.markdown(f"""
-- **Outstanding** = {basis}. **Overdue** = *Overdue amount* column (negative values excluded and reported).
-- **Collection efficiency** = Total Collection ÷ Total due amount.
-- **PARn** = outstanding of accounts with ≥ n Due EMIs ÷ total outstanding.
-- **Buckets** use *Due EMI Number* ({rounding.lower()} for fractions): Current 0, 1, 2, 3, 4-5, 6+.
-- **Monthly EMI demand** = sum of EMI for accounts with outstanding > 0.
-- Blank / non-numeric cells are read as 0 and listed in the **Data Quality** tab. Source values are never edited.""")
-
-# ======================================================================
-# MONTH OVER MONTH
-# ======================================================================
-with t_mom:
-    if prev_all is None:
-        st.info("Upload the previous month Excel file in the sidebar to enable this tab.")
-    else:
-        st.caption("Uses the full uploaded files (sidebar filters not applied) so accounts can be matched on Account Id.")
-        a = st.columns(5)
-        a[0].metric("Matched accounts", f"{int((mv._merge == 'both').sum()):,}")
-        a[1].metric("Moved to higher bucket", f"{mom_sum['higher']:,}")
-        a[2].metric("Moved to lower bucket", f"{mom_sum['lower']:,}")
-        a[3].metric("New accounts", f"{mom_sum['new']:,}")
-        a[4].metric("Closed / missing", f"{mom_sum['closed']:,}")
-        spec = [("Total outstanding", "outstanding", "m"), ("Total overdue", "overdue", "m"),
-                ("Total collection (cumulative)", "collected", "m"), ("Last-month collection", "last_month", "m"),
-                ("Collection efficiency", "efficiency", "p"), ("Accounts", "accounts", "i"),
-                ("Accounts with overdue", "od_accounts", "i"), ("PAR3", "par3", "p")]
-        rows = []
-        for lbl, key, kind in spec:
-            cv, pv_ = kc[key], kp[key]
-            f = {"m": lambda x: m_(x), "p": lambda x: pct(x), "i": lambda x: f"{x:,.0f}"}[kind]
-            if kind == "p":
-                chg, chg_p = (f"{(cv - pv_) * 100:+.1f} pts" if pd.notna(cv) and pd.notna(pv_) else "n/a"), ""
+    with t_anom:
+        st.markdown("#### 🔍 Statistical Outlier & High-Value Record Finder")
+        if num_cols:
+            anom_col = st.selectbox("Select Metric to Scan for Outliers (Z-Score > 2.0)", num_cols, key="anom_c")
+            s_num = clean_df[anom_col].dropna()
+            if len(s_num) > 3 and s_num.std() > 0:
+                z = (clean_df[anom_col] - s_num.mean()) / s_num.std()
+                outliers = clean_df[z.abs() >= 2.0].sort_values(anom_col, ascending=False)
+                st.write(f"Found **{len(outliers)}** statistical outlier record(s) where `{anom_col}` is unusually high or low:")
+                show_table(outliers, safe_table_mode, 50)
             else:
-                chg, chg_p = f"{cv - pv_:+,.0f}", pct(div(cv - pv_, abs(pv_)))
-            rows.append({"Metric": lbl, "Previous": f(pv_), "Current": f(cv), "Change": chg, "Change %": chg_p})
-        st.dataframe(pd.DataFrame(rows).set_index("Metric"), use_container_width=True)
-        st.caption("Collection growth: compare 'Total collection (cumulative)' and 'Last-month collection' rows above.")
+                st.info("Not enough variance to compute statistical outliers.")
 
-        mvc = mv.movement.value_counts().reset_index()
-        mvc.columns = ["movement", "accounts"]
-        plot(style_fig(px.bar(mvc, x="movement", y="accounts", text_auto=True), "Account movement between buckets"))
+    with t_export:
+        st.markdown("#### 🤖 AI Executive Summary & Client Deliverables")
+        p_cat = cat_cols[0] if cat_cols else clean_df.columns[0]
+        p_num = num_cols[0] if num_cols else clean_df.columns[-1]
+        summary_lines = [
+            f"- **Dataset Size:** {len(clean_df):,} cleaned records across {clean_df.shape[1]} columns.",
+            f"- **Cleaning Actions Completed:** {'; '.join(audit_log)}",
+        ]
+        if num_cols:
+            top_grp = clean_df.groupby(p_cat)[p_num].sum().sort_values(ascending=False)
+            if len(top_grp) > 0:
+                top_name = top_grp.index[0]
+                top_val = top_grp.iloc[0]
+                share = top_val / max(1e-9, clean_df[p_num].sum()) * 100
+                summary_lines.append(
+                    f"- **Primary Metric ({p_num}):** Total = {fmt_num(clean_df[p_num].sum(), currency_sym)}, Average = {fmt_num(clean_df[p_num].mean(), currency_sym, 1)}."
+                )
+                summary_lines.append(
+                    f"- **Top Performer ({p_cat}):** '{top_name}' leads with {fmt_num(top_val, currency_sym)} ({share:.1f}% of total)."
+                )
+        auto_summary_text = "\n".join(summary_lines)
 
-        st.subheader("Accounts that moved into a higher overdue bucket")
-        hi = mv[mv.movement == "Moved to higher bucket"].sort_values("overdue_change", ascending=False)
-        show_df(hi[["account", "customer", "branch", "collector", "bucket_prev", "bucket_cur",
-                    "overdue_amt_prev", "overdue_amt_cur", "overdue_change"]]
-                .rename(columns={"overdue_amt_prev": "overdue_prev", "overdue_amt_cur": "overdue_cur"}),
-                fmt={"overdue_prev": "{:,.0f}", "overdue_cur": "{:,.0f}", "overdue_change": "{:+,.0f}"})
+        if st.button("✨ Generate AI Executive Commentary"):
+            st.session_state["uni_ai_text"] = generate_ai_insights(auto_summary_text)
+        ai_txt = st.session_state.get("uni_ai_text", generate_ai_insights(auto_summary_text))
+        st.markdown(ai_txt)
 
-        for by, nm in (("branch", "Branch"), ("collector", "Collector")):
-            st.subheader(f"{nm}-wise comparison")
-            cg = compare_group(cur_all, prev_all, by)
-            a, b = st.columns(2)
-            with a:
-                plot(grouped_bar(cg, ["overdue_prev", "overdue_cur"], ["Previous", "Current"], f"Overdue by {by.lower()}"))
-            with b:
-                plot(grouped_bar(cg, ["collected_prev", "collected_cur"], ["Previous", "Current"], f"Total collection by {by.lower()}"))
-            show_df(cg, fmt={c_: "{:,.0f}" for c_ in cg.columns if c_.startswith(("outstanding", "overdue", "collected", "accounts"))}
-                    | {"efficiency_cur": "{:.1%}", "efficiency_prev": "{:.1%}", "efficiency_change_pts": "{:+.1f}"})
+        st.markdown("---")
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("📊 Build Executive PowerPoint (.pptx)"):
+                st.session_state["uni_ppt"] = build_universal_ppt(
+                    clean_df, company_name, p_cat, p_num if num_cols else None, hex_to_rgb(brand_color), ai_txt
+                )
+            if "uni_ppt" in st.session_state:
+                st.download_button(
+                    "⬇️ Download PowerPoint Presentation (.pptx)",
+                    st.session_state["uni_ppt"],
+                    file_name="Executive_Analytics_Presentation.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                )
+        with b2:
+            if st.button("📗 Build Cleaned & Analyzed Excel (.xlsx)"):
+                sheets = {
+                    "Cleaned_Data": clean_df,
+                    "Cleaning_Audit_Log": pd.DataFrame({"Step": range(1, len(audit_log) + 1), "Action": audit_log}),
+                    "Numeric_Summary": clean_df.describe().T.reset_index(),
+                }
+                if num_cols and cat_cols:
+                    sheets["Category_Breakdown"] = (
+                        clean_df.groupby(p_cat, as_index=False)
+                        .agg(Records=(p_num, "count"), Total=(p_num, "sum"), Average=(p_num, "mean"))
+                        .sort_values("Total", ascending=False)
+                    )
+                st.session_state["uni_xlsx"] = build_multi_sheet_excel(sheets)
+            if "uni_xlsx" in st.session_state:
+                st.download_button(
+                    "⬇️ Download Clean Excel Report (.xlsx)",
+                    st.session_state["uni_xlsx"],
+                    file_name="Cleaned_Business_Analytics_Report.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
 
-# ======================================================================
-# ROLL RATE
-# ======================================================================
-with t_roll:
-    if roll is None:
-        st.info("Roll-rate needs opening (previous) and closing (current) data. Upload the previous month Excel.")
-    else:
-        st.caption("Rows = opening bucket (previous file). Columns = closing bucket (current file). "
-                   "Accounts matched on Account Id. Roll-rate % = share of opening accounts in each closing bucket.")
-        rate = roll["rate"] * 100
-        fig = px.imshow(rate, text_auto=".1f", aspect="auto", color_continuous_scale="Blues",
-                        labels=dict(x="Closing bucket", y="Opening bucket", color="%"))
-        plot(style_fig(fig, "Roll-rate matrix (% of opening accounts)", 430))
-        st.subheader("Summary by opening bucket")
-        show_df(roll["summary"], fmt={"Roll-forward rate": "{:.1%}"})
-        a, b = st.columns(2)
-        with a:
-            st.markdown("**Account counts**")
-            st.dataframe(roll["cnt"], use_container_width=True)
-        with b:
-            st.markdown("**Outstanding amount** (opening balance; closing balance for new accounts)")
-            show_df(roll["amt"], fmt={c_: "{:,.0f}" for c_ in roll["amt"].columns})
+else:
+    auto_map = auto_map_credit_columns(raw_df.columns)
+    with st.sidebar.expander("🔧 Column Mapping (Auto-Detected)", expanded=False):
+        opts = [None] + list(raw_df.columns)
+        user_map = {}
+        for key, label, _ in CREDIT_FIELDS:
+            default_col = auto_map.get(key)
+            idx = opts.index(default_col) if default_col in opts else 0
+            user_map[key] = st.selectbox(label, opts, index=idx, key=f"map_{key}")
 
-# ======================================================================
-# COLLECTOR TARGETS
-# ======================================================================
-targets_result = None
-with t_tar:
-    st.caption("Targets apply to the collectors currently selected in the sidebar filters.")
-    bopts = ["Last month collection (column)", "Total Collection (cumulative)"]
-    if mv is not None:
-        bopts.append("Increase in Total Collection vs previous file (matched accounts)")
-    abasis = st.radio("Actual collection =", bopts)
-    up = st.file_uploader("Upload targets (Excel with a collector-name column and a 'Target' column)",
-                          type=["xlsx", "xls"], key="tgt_up")
-    colls = sorted(df.collector.unique())
-    base = pd.DataFrame({"Collector": colls, "Target": 0.0})
-    if up:
-        try:
-            tu = read_targets(up)
-            low = base.Collector.str.strip().str.lower()
-            base["Target"] = low.map(tu).fillna(0.0)
-            unmatched = [n for n in tu.index if n not in set(low)]
-            if unmatched:
-                st.warning("Target file names not found in the data: " + ", ".join(unmatched[:15]))
-        except Exception as e:
-            st.error(f"Could not read targets: {e}")
-    edited = st.data_editor(base, disabled=["Collector"], hide_index=True, use_container_width=True,
-                            key=f"tgt_{up.name if up else 'manual'}_{len(base)}",
-                            column_config={"Target": st.column_config.NumberColumn(min_value=0, format="%.0f")})
-    if abasis.startswith("Last"):
-        actual = df.groupby("collector").last_month_coll.sum()
-    elif abasis.startswith("Total"):
-        actual = df.groupby("collector").total_coll.sum()
-    else:
-        actual = mv[mv._merge == "both"].groupby("collector").collection_in_period.sum()
-    res = edited.set_index("Collector")
-    res["Actual"] = actual.reindex(res.index).fillna(0)
-    res["Achievement %"] = np.where(res.Target > 0, res.Actual / res.Target.replace(0, np.nan), np.nan)
-    res["Shortfall"] = np.where(res.Target > 0, (res.Target - res.Actual).clip(lower=0), 0)
-    res["Rank"] = res["Achievement %"].rank(ascending=False, method="min")
-    res = res.sort_values("Rank")
-    if (res.Target > 0).any():
-        targets_result = res.reset_index()
-        tt, aa = res.Target.sum(), res.Actual[res.Target > 0].sum()
-        x = st.columns(4)
-        x[0].metric("Total target", m_(tt))
-        x[1].metric("Actual (collectors with target)", m_(aa))
-        x[2].metric("Achievement", pct(div(aa, tt)))
-        x[3].metric("Total shortfall", m_(res.Shortfall.sum()))
-        show_df(res, fmt={"Target": "{:,.0f}", "Actual": "{:,.0f}", "Achievement %": "{:.1%}",
-                          "Shortfall": "{:,.0f}", "Rank": "{:.0f}"})
-        r2 = res[res.Target > 0].reset_index()
-        plot(grouped_bar(r2.set_index("Collector"), ["Target", "Actual"], ["Target", "Actual"], "Target vs actual", 25))
-    else:
-        st.info("Enter targets in the table (or upload an Excel) to see achievement, shortfall and ranking.")
+    out_basis = st.sidebar.radio("Outstanding Basis", ["Net balance", "Balance receivable"])
+    df_cred, cred_notes = prepare_credit_data(raw_df, user_map, out_basis)
 
-# ======================================================================
-# PROVISIONING
-# ======================================================================
-with t_prov:
-    st.warning("**Management estimate only - not an official accounting or regulatory provision.** "
-               "Provision = outstanding balance of accounts in each bucket × rate. No deduction is made for "
-               "vehicle (collateral) value. Rates are editable assumptions.")
-    rate_df = pd.DataFrame({"Bucket group": PROV_GROUPS, "Rate %": PROV_DEFAULT})
-    ed = st.data_editor(rate_df, disabled=["Bucket group"], hide_index=True, key="prov_rates",
-                        column_config={"Rate %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0,
-                                                                                step=1.0, format="%.1f")})
-    rates = dict(zip(ed["Bucket group"], ed["Rate %"].fillna(0.0)))
-    prov = provision_table(df, rates)
-    x = st.columns(3)
-    x[0].metric("Estimated provision", m_(prov.provision.sum()))
-    x[1].metric("As % of total outstanding", pct(div(prov.provision.sum(), k["outstanding"])))
-    x[2].metric("Outstanding in provisioned buckets", m_(prov.outstanding.sum()))
-    show_df(prov)
-    plot(style_fig(px.bar(prov.reset_index(), x="prov_group", y="provision", text_auto=".3s"),
-                   "Estimated provision by bucket"))
-    dfp = df.assign(prov_amt=df.prov_group.astype(object).map(rates).fillna(0) * df.outstanding / 100)
-    st.subheader("Estimated provision by branch")
-    show_df(dfp.groupby("branch").agg(accounts=("account", "size"), outstanding=("outstanding", "sum"),
-                                      provision=("prov_amt", "sum")).sort_values("provision", ascending=False))
+    st.sidebar.markdown("### 🔍 Filters")
+    branches = sorted(df_cred["branch"].unique())
+    sel_br = st.sidebar.multiselect("Branch", branches, default=branches)
+    collectors = sorted(df_cred["collector"].unique())
+    sel_co = st.sidebar.multiselect("Collector", collectors, default=collectors)
+    df_f = df_cred[df_cred["branch"].isin(sel_br) & df_cred["collector"].isin(sel_co)].copy()
 
-# ======================================================================
-# RECOVERY PRIORITY
-# ======================================================================
-with t_pri:
-    st.caption("Transparent score from 0-100. Adjust the weights (they are normalised to 100%).")
-    wc = st.columns(5)
-    w_raw = {"overdue": wc[0].slider("Overdue amount", 0, 100, 40),
-             "due_emi": wc[1].slider("Due EMI count", 0, 100, 30),
-             "down_payment": wc[2].slider("Low down payment", 0, 100, 15),
-             "outstanding": wc[3].slider("Outstanding balance", 0, 100, 15)}
-    dp_cap = wc[4].slider("Down payment treated as safe at", 10, 50, 30, format="%d%%") / 100
-    tot_w = sum(w_raw.values())
-    weights = {k_: (v / tot_w if tot_w else 0.25) for k_, v in w_raw.items()}
-    top_n = st.number_input("Accounts to list", 10, 1000, 100, step=10)
-    prio = priority(df, weights, dp_cap, cur, int(top_n))
-    with st.expander("How the score works"):
-        st.markdown(f"""
-Score = weighted average of four components (each 0-100), over overdue accounts only:
-1. **Overdue amount** - percentile rank among overdue accounts.
-2. **Due EMI count** - Due EMIs ÷ 6 (capped at 100).
-3. **Down payment** - 100 when down payment is 0% of sales price, falling to 0 at {dp_cap:.0%} or more.
-   If sales price / down payment is unavailable the component is **left out** and the other weights are rescaled.
-4. **Outstanding balance** - percentile rank among overdue accounts.
+    prio_df = score_recovery_priority(df_f)
 
-The score is a ranking aid for follow-up order, not a probability of default.""")
-    if len(prio):
-        show_df(prio[["rank", "account", "customer", "vehicle", "branch", "collector", "due_emi_no",
-                      "overdue_amt", "outstanding", "dp_pct", "score", "main_driver", "explanation"]],
-                fmt={"dp_pct": "{:.0%}", "due_emi_no": "{:g}", "outstanding": "{:,.0f}"}, hide_index=True)
-    else:
-        st.info("No overdue accounts in the current selection.")
+    tot_out = df_f["outstanding"].sum()
+    tot_od = df_f["overdue_amt"].sum()
+    tot_due = df_f["total_due"].sum()
+    tot_coll = df_f["total_coll"].sum()
+    eff = (tot_coll / tot_due * 100) if tot_due > 0 else 0.0
+    par1 = (df_f.loc[df_f["due_emi_no"] >= 1, "outstanding"].sum() / tot_out * 100) if tot_out > 0 else 0.0
+    od_cnt = int((df_f["overdue_amt"] > 0).sum())
 
-# ======================================================================
-# DATA QUALITY
-# ======================================================================
-with t_dq:
-    st.write(f"Rows read: **{Q['rows_in']:,}** · rows kept: **{Q['rows_out']:,}** · "
-             f"removed: **{Q['rows_in'] - Q['rows_out']:,}**")
-    if not Q["notes"]:
-        st.success("No data-quality issues detected.")
-    for lvl, msg in Q["notes"]:
-        {"error": st.error, "warning": st.warning}.get(lvl, st.info)(msg)
-    for name, d in Q["exceptions"].items():
-        with st.expander(f"{name} ({len(d)})"):
-            show_df(d, fmt={c_: "{:,.2f}" for c_ in ("outstanding", "total_due", "total_coll", "overdue_raw", "due_raw")})
-    if len(Q["removed"]):
-        with st.expander(f"Removed rows ({len(Q['removed'])})"):
-            st.dataframe(Q["removed"].astype(str), use_container_width=True)
-    if prev_all is not None:
-        with st.expander("Previous file - quality notes"):
-            for lvl, msg in Qp["notes"]:
-                st.write(f"{lvl.upper()}: {msg}")
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.markdown(f'<div class="kpi-card"><div class="kpi-title">Total Outstanding</div><div class="kpi-val">{fmt_num(tot_out, currency_sym)}</div></div>', unsafe_allow_html=True)
+    k2.markdown(f'<div class="kpi-card"><div class="kpi-title">Total Overdue</div><div class="kpi-val">{fmt_num(tot_od, currency_sym)}</div></div>', unsafe_allow_html=True)
+    k3.markdown(f'<div class="kpi-card"><div class="kpi-title">Total Collection</div><div class="kpi-val">{fmt_num(tot_coll, currency_sym)}</div></div>', unsafe_allow_html=True)
+    k4.markdown(f'<div class="kpi-card"><div class="kpi-title">Collection Efficiency</div><div class="kpi-val">{eff:.1f}%</div></div>', unsafe_allow_html=True)
+    k5.markdown(f'<div class="kpi-card"><div class="kpi-title">Overdue Accounts</div><div class="kpi-val">{od_cnt:,} / {len(df_f):,}</div></div>', unsafe_allow_html=True)
+    k6.markdown(f'<div class="kpi-card"><div class="kpi-title">PAR 1+ (At Risk)</div><div class="kpi-val">{par1:.1f}%</div></div>', unsafe_allow_html=True)
 
-# ======================================================================
-# PDF
-# ======================================================================
-with t_pdf:
-    if f_pdf:
-        text, tables = read_pdf(f_pdf.getvalue())
-        st.text_area("Extracted text", text, height=240)
-        kw = st.text_input("Search keyword (e.g. repossession, provision, legal)")
-        if kw:
-            for line in [l for l in text.splitlines() if kw.lower() in l.lower()][:30]:
-                st.write("•", line)
-        for i, tb in enumerate(tables):
-            st.write(f"Table {i + 1}")
-            st.dataframe(tb)
-        st.session_state["pdf_notes"] = st.text_area("Notes to include in the presentation (speaker notes, slide 10)",
-                                                     value=text[:800], height=140)
-    else:
-        st.info("Upload a PDF in the sidebar (optional). Scanned PDFs need OCR and are not supported.")
+    t1, t2, t3, t4 = st.tabs(
+        ["📊 1. Executive Dashboard", "🚨 2. Recovery Priority List (0-100 Score)", "🛡️ 3. Provisioning & Data Quality", "📥 4. PowerPoint & Excel Export"]
+    )
 
-# ======================================================================
-# REPORTS & AI
-# ======================================================================
-with t_rep:
-    st.subheader("AI management commentary (Gemini)")
-    gkey = get_secret("GEMINI_API_KEY")
-    if not gkey:
-        st.info("Add `GEMINI_API_KEY` to Streamlit secrets or an environment variable to enable this section.")
-    else:
-        model = st.text_input("Gemini model", get_secret("GEMINI_MODEL", "gemini-2.5-flash"))
-        incl = st.checkbox("Send collector names to Gemini (otherwise anonymised as Collector 1, 2…)", False)
-        st.caption("Only aggregated figures are sent. Customer names, account IDs and vehicle numbers never leave "
-                   "this app. Free-tier prompts may be used by Google to improve its products - do not enable if "
-                   "your policy forbids sharing portfolio figures externally.")
-        if st.button("Generate commentary"):
-            cot = co.head(8).copy()
-            if not incl:
-                cot.index = [f"Collector {i + 1}" for i in range(len(cot))]
-            cols_ = ["accounts", "outstanding", "overdue", "efficiency", "overdue_pct"]
-            payload = {"currency": cur or "n/a", "as_of": str(as_of), "kpis": k,
-                       "buckets": aging[cols_].reset_index().astype({"bucket": str}).to_dict("records"),
-                       "branches_top8": br.head(8)[cols_].reset_index().to_dict("records"),
-                       "collectors_top8": cot[cols_].reset_index().to_dict("records"),
-                       "risk_status": risk_t[cols_].reset_index().astype({"risk": str}).to_dict("records"),
-                       "provision_estimate_total": float(provision_table(df, rates).provision.sum()),
-                       "month_over_month": mom_sum or "previous file not uploaded",
-                       "roll_forward_rate_by_bucket": (roll["summary"]["Roll-forward rate"].to_dict()
-                                                       if roll else "not available"),
-                       "top_priority_accounts_count": int(len(prio))}
-            try:
-                with st.spinner("Asking Gemini…"):
-                    st.session_state["ai_text"] = gemini_commentary(payload, gkey, model)
-            except requests.HTTPError as e:
-                st.error(f"Gemini request failed (HTTP {e.response.status_code}). Check the key, model name and quota.")
-            except Exception as e:
-                st.error(f"Gemini request failed: {type(e).__name__}")
-    ai_text = st.session_state.get("ai_text", "")
-    if ai_text:
-        st.markdown(ai_text)
-        st.caption("AI-generated draft - review against the figures before presenting.")
+    with t1:
+        c1, c2 = st.columns(2)
+        with c1:
+            ag = df_f.groupby("bucket", as_index=False).agg(Accounts=("account_id", "count"), Overdue=("overdue_amt", "sum"), Outstanding=("outstanding", "sum"))
+            fig1 = px.bar(ag, x="bucket", y=["Outstanding", "Overdue"], barmode="group", title="Portfolio by Due EMI Bucket")
+            st.plotly_chart(fig1, use_container_width=True)
+        with c2:
+            br_df = df_f.groupby("branch", as_index=False).agg(Overdue=("overdue_amt", "sum"), Collected=("total_coll", "sum")).sort_values("Overdue", ascending=False).head(12)
+            fig2 = px.bar(br_df, x="branch", y=["Overdue", "Collected"], barmode="group", title="Branch-Wise Overdue vs Collection")
+            st.plotly_chart(fig2, use_container_width=True)
 
-    st.divider()
-    st.subheader("Exports")
-    st.caption("Exports reflect the current sidebar filters. Click generate again after changing filters.")
-    ctx = dict(company=company, brand=brand, as_of=str(as_of), cur=cur, k=k, aging=aging, br=br, co=co, vm=vm,
-               roll=roll, prov=prov, prio=prio, targets=targets_result, insights=insights, recs=recs,
-               mom=mom_sum, ai_text=ai_text, pdf_notes=st.session_state.get("pdf_notes", ""), weights=weights)
-    a, b = st.columns(2)
-    if a.button("Build PowerPoint (10 slides)"):
-        try:
-            st.session_state["ppt"] = build_pptx(ctx)
-        except Exception as e:
-            st.error(f"PowerPoint build failed: {type(e).__name__}: {e}")
-    if "ppt" in st.session_state:
-        a.download_button("⬇️ Download PPTX", st.session_state["ppt"], "credit_recovery_review.pptx",
-                          "application/vnd.openxmlformats-officedocument.presentationml.presentation")
-    if b.button("Build Excel report"):
-        kdf = pd.DataFrame([("Total outstanding", k["outstanding"]), ("Total overdue", k["overdue"]),
-                            ("Total collection", k["collected"]), ("Collection efficiency", k["efficiency"]),
-                            ("PAR1", k["par1"]), ("PAR2", k["par2"]), ("PAR3", k["par3"]),
-                            ("Accounts", k["accounts"]), ("Accounts with overdue", k["od_accounts"]),
-                            ("Outstanding basis", basis), ("Fractional Due EMI", rounding),
-                            ("Provision note", "Management estimate - not an official accounting provision")],
-                           columns=["Metric", "Value"])
-        sheets = {"Summary": (kdf, False), "By Bucket": (aging, True), "By Branch": (br, True),
-                  "By Collector": (co, True), "By Sales Person": (sp, True), "By Risk Status": (risk_t, True),
-                  "Provisioning (estimate)": (prov.reset_index(), False),
-                  "Priority List": (prio.drop(columns=["p_overdue", "p_outstanding"], errors="ignore")
-                                    if len(prio) else pd.DataFrame(), False),
-                  "Data Quality": (pd.DataFrame(Q["notes"], columns=["Level", "Message"]), False)}
-        if vm is not None:
-            sheets["By Vehicle Model"] = (vm, True)
-        if targets_result is not None:
-            sheets["Collector Targets"] = (targets_result, False)
-        if roll is not None:
-            sheets["Roll-Rate %"] = (roll["rate"], True)
-            sheets["Roll-Rate Counts"] = (roll["cnt"], True)
-            sheets["Roll-Rate Summary"] = (roll["summary"], True)
-            sheets["MoM Accounts"] = (mv.drop(columns=["_merge"]), False)
-        sheets["Processed Data"] = (df, False)
-        try:
-            st.session_state["xlsx"] = build_excel(sheets)
-        except Exception as e:
-            st.error(f"Excel build failed: {type(e).__name__}: {e}")
-    if "xlsx" in st.session_state:
-        b.download_button("⬇️ Download Excel report", st.session_state["xlsx"], "credit_recovery_report.xlsx",
-                          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        c3, c4 = st.columns(2)
+        with c3:
+            co_df = df_f.groupby("collector", as_index=False).agg(Due=("total_due", "sum"), Collected=("total_coll", "sum"), Overdue=("overdue_amt", "sum"))
+            co_df["Efficiency %"] = np.where(co_df["Due"] > 0, (co_df["Collected"] / co_df["Due"] * 100).round(1), 0.0)
+            co_df = co_df.sort_values("Efficiency %", ascending=True)
+            fig3 = px.bar(co_df, x="Efficiency %", y="collector", orientation="h", text="Efficiency %", title="Collection Efficiency by Collector (%)")
+            st.plotly_chart(fig3, use_container_width=True)
+        with c4:
+            rk_df = df_f.groupby("risk_status", as_index=False).agg(Accounts=("account_id", "count"), Overdue=("overdue_amt", "sum"))
+            fig4 = px.pie(rk_df, names="risk_status", values="Overdue", hole=0.45, title="Overdue Share by Risk Tier")
+            st.plotly_chart(fig4, use_container_width=True)
+
+    with t2:
+        st.markdown("#### 🚨 Vehicle / Loan Recovery Priority Ranking")
+        if prio_df.empty:
+            st.success("No overdue accounts found in the current filter.")
+        else:
+            cols_p = ["rank", "account_id", "customer", "vehicle_reg", "branch", "collector", "due_emi_no", "overdue_amt", "outstanding", "score", "main_driver", "explanation"]
+            show_table(prio_df[cols_p], safe_table_mode, 100)
+
+    with t3:
+        st.markdown("#### 🛡️ Management Provisioning Estimate (Non-Accounting Estimate)")
+        prov = (
+            df_f.groupby("bucket", as_index=False)
+            .agg(Accounts=("account_id", "count"), Outstanding=("outstanding", "sum"), Overdue=("overdue_amt", "sum"))
+        )
+        rate_map = {"Current (0 EMI)": 0.0, "1 EMI": 0.05, "2 EMI": 0.25, "3 EMI": 0.50, "4-5 EMI": 0.50, "6+ EMI": 1.00}
+        prov["Provision Rate %"] = prov["bucket"].map(rate_map).fillna(0.0) * 100
+        prov["Estimated Provision"] = (prov["Outstanding"] * prov["Provision Rate %"] / 100.0).round(0)
+        show_table(prov, safe_table_mode, 20)
+
+        if cred_notes:
+            st.markdown("#### ⚠️ Data Quality & Derivation Notes")
+            show_table(pd.DataFrame(cred_notes, columns=["Level", "Note"]), safe_table_mode, 20)
+
+    with t4:
+        cred_summary_txt = (
+            f"- **Total Accounts:** {len(df_f):,} ({od_cnt:,} with overdue).\n"
+            f"- **Total Outstanding ({out_basis}):** {fmt_num(tot_out, currency_sym)}.\n"
+            f"- **Total Overdue Amount:** {fmt_num(tot_od, currency_sym)}.\n"
+            f"- **Collection Efficiency:** {eff:.1f}% (PAR 1+: {par1:.1f}%)."
+        )
+        ai_cred = generate_ai_insights(cred_summary_txt)
+        st.markdown(ai_cred)
+
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("📊 Build Credit Recovery PowerPoint"):
+                st.session_state["cred_ppt"] = build_credit_ppt(
+                    df_f, prio_df, company_name, currency_sym, hex_to_rgb(brand_color), ai_cred
+                )
+            if "cred_ppt" in st.session_state:
+                st.download_button(
+                    "⬇️ Download Credit Recovery PPT (.pptx)",
+                    st.session_state["cred_ppt"],
+                    file_name="Credit_Recovery_Executive_Deck.pptx",
+                    mime="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                )
+        with b2:
+            if st.button("📗 Build Full Credit Excel Report"):
+                sheets_c = {
+                    "Branch_Summary": df_f.groupby("branch", as_index=False).agg(Accounts=("account_id", "count"), Outstanding=("outstanding", "sum"), Overdue=("overdue_amt", "sum"), Collected=("total_coll", "sum")),
+                    "Collector_Summary": df_f.groupby("collector", as_index=False).agg(Accounts=("account_id", "count"), Outstanding=("outstanding", "sum"), Overdue=("overdue_amt", "sum"), Collected=("total_coll", "sum")),
+                    "Priority_List": prio_df,
+                    "Cleaned_Portfolio": df_f,
+                }
+                st.session_state["cred_xlsx"] = build_multi_sheet_excel(sheets_c)
+            if "cred_xlsx" in st.session_state:
+                st.download_button(
+                    "⬇️ Download Credit Recovery Excel (.xlsx)",
+                    st.session_state["cred_xlsx"],
+                    file_name="Credit_Recovery_Report.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+```
