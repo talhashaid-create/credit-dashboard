@@ -51,80 +51,30 @@ def format_number(value: float) -> str:
 #  KPI Cards  (HTML)
 # ══════════════════════════════════════════════
 def render_kpi_cards(kpis: dict):
-   """Render 4-column KPI card row using HTML."""
     cards = [
-        {
-            "label": "Total Outstanding",
-            "value": format_currency(kpis.get("total_outstanding", 0)),
-            "sub": f"{format_number(kpis.get('total_records', 0))} accounts",
-            "cls": "",
-        },
-        {
-            "label": "Total Collection",
-            "value": format_currency(kpis.get("total_collection", 0)),
-            "sub": f"Efficiency: {kpis.get('collection_efficiency', 0):.1f}%",
-            "cls": "green",
-        },
-        {
-            "label": "Total Overdue",
-            "value": format_currency(kpis.get("total_overdue", 0)),
-            "sub": f"{kpis.get('overdue_pct', 0):.1f}% of total",
-            "cls": "red",
-        },
-        {
-            "label": "Collection Efficiency",
-            "value": f"{kpis.get('collection_efficiency', 0):.1f}%",
-            "sub": f"Avg overdue: {kpis.get('avg_overdue_days', 0):.0f} days",
-            "cls": "orange",
-        },
+        {"label": "Total Outstanding", "value": format_currency(kpis.get("total_outstanding", 0)), "sub": f"{format_number(kpis.get('total_records', 0))} accounts", "cls": ""},
+        {"label": "Total Collection", "value": format_currency(kpis.get("total_collection", 0)), "sub": f"Efficiency: {kpis.get('collection_efficiency', 0):.1f}%", "cls": "green"},
+        {"label": "Total Overdue", "value": format_currency(kpis.get("total_overdue", 0)), "sub": f"{kpis.get('overdue_pct', 0):.1f}% of total", "cls": "red"},
+        {"label": "Collection Efficiency", "value": f"{kpis.get('collection_efficiency', 0):.1f}%", "sub": f"Avg overdue: {kpis.get('avg_overdue_days', 0):.0f} days", "cls": "orange"},
     ]
-
     html = '<div class="kpi-row">'
     for c in cards:
         html += f'<div class="kpi-card {c["cls"]}"><div class="kpi-label">{c["label"]}</div><div class="kpi-value">{c["value"]}</div><div class="kpi-sub">{c["sub"]}</div></div>'
     html += "</div>"
     return html
 
-
 def render_kpi_cards_secondary(kpis: dict):
-    """Second row of KPI cards."""
     cards = [
-        {
-            "label": "Total Portfolio",
-            "value": format_currency(kpis.get("total_amount", 0)),
-            "sub": f"{format_number(kpis.get('unique_customers', 0))} customers",
-            "cls": "purple",
-        },
-        {
-            "label": "Unique Vehicles",
-            "value": format_number(kpis.get("unique_vehicles", 0)),
-            "sub": "Models tracked",
-            "cls": "teal",
-        },
-        {
-            "label": "Active Collectors",
-            "value": format_number(kpis.get("unique_collectors", 0)),
-            "sub": "In current selection",
-            "cls": "green",
-        },
-        {
-            "label": "High Risk Accounts",
-            "value": format_number(
-                kpis.get("critical_count", 0) + kpis.get("high_risk_count", 0)
-            ),
-            "sub": f"Critical: {kpis.get('critical_count', 0)} | High: {kpis.get('high_risk_count', 0)}",
-            "cls": "red",
-        },
+        {"label": "Total Portfolio", "value": format_currency(kpis.get("total_amount", 0)), "sub": f"{format_number(kpis.get('unique_customers', 0))} customers", "cls": "purple"},
+        {"label": "Unique Vehicles", "value": format_number(kpis.get("unique_vehicles", 0)), "sub": "Models tracked", "cls": "teal"},
+        {"label": "Active Collectors", "value": format_number(kpis.get("unique_collectors", 0)), "sub": "In current selection", "cls": "green"},
+        {"label": "High Risk Accounts", "value": format_number(kpis.get("critical_count", 0) + kpis.get("high_risk_count", 0)), "sub": f"Critical: {kpis.get('critical_count', 0)} | High: {kpis.get('high_risk_count', 0)}", "cls": "red"},
     ]
-
     html = '<div class="kpi-row">'
     for c in cards:
         html += f'<div class="kpi-card {c["cls"]}"><div class="kpi-label">{c["label"]}</div><div class="kpi-value">{c["value"]}</div><div class="kpi-sub">{c["sub"]}</div></div>'
     html += "</div>"
     return html
-
-
-def render_kpi_cards_secondary(kpis: dict):
     """Second row of KPI cards."""
     cards = [
         {
