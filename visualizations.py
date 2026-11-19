@@ -51,7 +51,7 @@ def format_number(value: float) -> str:
 #  KPI Cards  (HTML)
 # ══════════════════════════════════════════════
 def render_kpi_cards(kpis: dict):
-    """Render 4-column KPI card row using HTML."""
+   """Render 4-column KPI card row using HTML."""
     cards = [
         {
             "label": "Total Outstanding",
@@ -81,13 +81,45 @@ def render_kpi_cards(kpis: dict):
 
     html = '<div class="kpi-row">'
     for c in cards:
-        html += f"""
-        <div class="kpi-card {c['cls']}">
-            <div class="kpi-label">{c['label']}</div>
-            <div class="kpi-value">{c['value']}</div>
-            <div class="kpi-sub">{c['sub']}</div>
-        </div>
-        """
+        html += f'<div class="kpi-card {c["cls"]}"><div class="kpi-label">{c["label"]}</div><div class="kpi-value">{c["value"]}</div><div class="kpi-sub">{c["sub"]}</div></div>'
+    html += "</div>"
+    return html
+
+
+def render_kpi_cards_secondary(kpis: dict):
+    """Second row of KPI cards."""
+    cards = [
+        {
+            "label": "Total Portfolio",
+            "value": format_currency(kpis.get("total_amount", 0)),
+            "sub": f"{format_number(kpis.get('unique_customers', 0))} customers",
+            "cls": "purple",
+        },
+        {
+            "label": "Unique Vehicles",
+            "value": format_number(kpis.get("unique_vehicles", 0)),
+            "sub": "Models tracked",
+            "cls": "teal",
+        },
+        {
+            "label": "Active Collectors",
+            "value": format_number(kpis.get("unique_collectors", 0)),
+            "sub": "In current selection",
+            "cls": "green",
+        },
+        {
+            "label": "High Risk Accounts",
+            "value": format_number(
+                kpis.get("critical_count", 0) + kpis.get("high_risk_count", 0)
+            ),
+            "sub": f"Critical: {kpis.get('critical_count', 0)} | High: {kpis.get('high_risk_count', 0)}",
+            "cls": "red",
+        },
+    ]
+
+    html = '<div class="kpi-row">'
+    for c in cards:
+        html += f'<div class="kpi-card {c["cls"]}"><div class="kpi-label">{c["label"]}</div><div class="kpi-value">{c["value"]}</div><div class="kpi-sub">{c["sub"]}</div></div>'
     html += "</div>"
     return html
 
