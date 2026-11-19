@@ -1,10 +1,3 @@
-"""
-Configuration module – Credit Recovery & Analytics Management System
-"""
-
-# ──────────────────────────────────────────────
-#  COLOUR PALETTE  –  Executive Corporate Theme
-# ──────────────────────────────────────────────
 COLOR_PRIMARY        = "#1B2A4A"
 COLOR_SECONDARY      = "#2E86AB"
 COLOR_ACCENT         = "#E63946"
@@ -18,75 +11,28 @@ COLOR_TEXT_MEDIUM    = "#4A5568"
 COLOR_TEXT_LIGHT     = "#A0AEC0"
 COLOR_BORDER         = "#E2E8F0"
 
-CHART_COLORS = [
-    "#2E86AB", "#E63946", "#2D6A4F", "#E09F3E",
-    "#7B2D8B", "#FF6B6B", "#4ECDC4", "#45B7D1",
-    "#96CEB4", "#F39C12", "#DDA0DD", "#98D8C8",
-]
+CHART_COLORS = ["#2E86AB", "#E63946", "#2D6A4F", "#E09F3E", "#7B2D8B", "#FF6B6B", "#4ECDC4", "#45B7D1"]
+PIE_COLORS = ["#2E86AB", "#E63946", "#2D6A4F", "#E09F3E", "#7B2D8B", "#FF6B6B", "#4ECDC4", "#45B7D1"]
 
-PIE_COLORS = ["#2E86AB", "#E63946", "#2D6A4F", "#E09F3E",
-              "#7B2D8B", "#FF6B6B", "#4ECDC4", "#45B7D1"]
-
-# ──────────────────────────────────────────────
-#  COLUMN MAPPING PATTERNS (Updated for your Excel)
-# ──────────────────────────────────────────────
 COLUMN_PATTERNS = {
-    "customer_id": [
-        "sl", "account id", "regd. no", "customer id", "a/c no", "customer code"
-    ],
-    "customer_name": [
-        "customer name", "customer", "name", "client name"
-    ],
-    "vehicle_model": [
-        "model", "vehicle model", "vehicle", "car model"
-    ],
-    "collector_name": [
-        "collection person", "sales person", "collector", "agent", "officer"
-    ],
-    "region": [
-        "branch name", "branch", "region", "area", "zone"
-    ],
-    "outstanding_amount": [
-        "balance receivable", "net balance", "outstanding", "balance", "due amount"
-    ],
-    "collection_amount": [
-        "total collection amount", "last month collection", "collection", "received", "paid"
-    ],
-    "overdue_amount": [
-        "over due amount", "total installment due amount", "overdue", "arrears"
-    ],
-    "total_amount": [
-        "sale price", "bill amount", "total amount", "loan amount"
-    ],
-    "overdue_days": [
-        "overdue days", "dpd", "days overdue", "ageing days"
-    ],
-    "due_date": [
-        "emi date", "due date", "payment due date"
-    ],
-    "collection_date": [
-        "collection date", "payment date", "recovery date"
-    ],
-    "status": [
-        "status", "account status", "collection status"
-    ]
+    "customer_id": ["sl", "account id", "regd. no", "customer id", "a/c no"],
+    "customer_name": ["customer name", "customer", "name", "client"],
+    "vehicle_model": ["model", "vehicle model", "vehicle"],
+    "collector_name": ["collection person", "sales person", "collector", "agent"],
+    "region": ["branch name", "branch", "region", "area"],
+    "outstanding_amount": ["balance receivable", "net balance", "outstanding", "balance"],
+    "collection_amount": ["total collection amount", "last month collection", "collection"],
+    "overdue_amount": ["over due amount", "total installment due amount", "overdue", "arrears"],
+    "total_amount": ["sale price", "bill amount", "total amount", "loan amount"],
+    "overdue_days": ["overdue days", "dpd", "days overdue", "ageing days"],
+    "due_date": ["emi date", "due date", "payment due date"],
+    "collection_date": ["collection date", "payment date", "recovery date"],
 }
 
-# Fields that MUST be present
 REQUIRED_FIELDS = ["customer_name", "outstanding_amount"]
-
-# Numeric fields for conversion
-NUMERIC_FIELDS = [
-    "outstanding_amount", "collection_amount",
-    "overdue_amount", "total_amount", "overdue_days",
-]
-
-# Date fields
+NUMERIC_FIELDS = ["outstanding_amount", "collection_amount", "overdue_amount", "total_amount", "overdue_days"]
 DATE_FIELDS = ["due_date", "collection_date"]
 
-# ──────────────────────────────────────────────
-#  CUSTOM CSS (Design)
-# ──────────────────────────────────────────────
 CUSTOM_CSS = """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
