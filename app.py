@@ -360,14 +360,13 @@ with tabs[0]:
 
     c1, c2 = st.columns(2)
     with c1:
-        st.plotly_chart(create_overdue_pie(overdue_df), use_container_width=True)
+        st.plotly_chart(create_overdue_pie(overdue_df), use_container_width=True, key="chart1")
     with c2:
-        st.plotly_chart(create_risk_distribution(risk_df), use_container_width=True)
+        st.plotly_chart(create_risk_distribution(risk_df), use_container_width=True, key="chart2")
 
-    st.markdown('<div class="section-title">Regional Overview</div>',
-                unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Regional Overview</div>', unsafe_allow_html=True)
     if "region" in df.columns:
-        st.plotly_chart(create_region_chart(df), use_container_width=True)
+        st.plotly_chart(create_region_chart(df), use_container_width=True, key="chart3")
 
     # Top tables
     c3, c4 = st.columns(2)
@@ -402,9 +401,9 @@ with tabs[1]:
     if not overdue_df.empty:
         c1, c2 = st.columns(2)
         with c1:
-            st.plotly_chart(create_overdue_pie(overdue_df), use_container_width=True)
+             st.plotly_chart(create_overdue_pie(overdue_df), use_container_width=True, key="chart4")
         with c2:
-            st.plotly_chart(create_overdue_bar(overdue_df), use_container_width=True)
+           st.plotly_chart(create_overdue_bar(overdue_df), use_container_width=True, key="chart5")
 
         st.markdown("#### Detailed Overdue Table")
         display = overdue_df.copy()
@@ -435,9 +434,9 @@ with tabs[2]:
     if not risk_df.empty:
         c1, c2 = st.columns(2)
         with c1:
-            st.plotly_chart(create_risk_distribution(risk_df), use_container_width=True)
+            st.plotly_chart(create_risk_distribution(risk_df), use_container_width=True, key="chart6")
         with c2:
-            st.plotly_chart(create_risk_scatter(risk_df), use_container_width=True)
+            st.plotly_chart(create_risk_scatter(risk_df), use_container_width=True, key="chart7")
 
         st.markdown("#### 🔴  High-Risk Customers (Top 20)")
         if not high_risk_df.empty:
@@ -471,9 +470,9 @@ with tabs[3]:
     if not collector_df.empty:
         c1, c2 = st.columns(2)
         with c1:
-            st.plotly_chart(create_collector_chart(collector_df), use_container_width=True)
+            st.plotly_chart(create_collector_chart(collector_df), use_container_width=True, key="chart8")
         with c2:
-            st.plotly_chart(create_collector_efficiency_gauge(collector_df), use_container_width=True)
+            st.plotly_chart(create_collector_efficiency_gauge(collector_df), use_container_width=True, key="chart9")
 
         st.markdown("#### Performance Table")
         display_col = collector_df.copy()
@@ -503,9 +502,9 @@ with tabs[4]:
     if not vehicle_df.empty:
         c1, c2 = st.columns(2)
         with c1:
-            st.plotly_chart(create_vehicle_chart(vehicle_df), use_container_width=True)
+            st.plotly_chart(create_vehicle_chart(vehicle_df), use_container_width=True, key="chart10")
         with c2:
-            st.plotly_chart(create_vehicle_pie(vehicle_df), use_container_width=True)
+            st.plotly_chart(create_vehicle_pie(vehicle_df), use_container_width=True, key="chart11")
 
         st.markdown("#### Vehicle Model Table")
         display_veh = vehicle_df.copy()
@@ -524,7 +523,7 @@ with tabs[5]:
     st.markdown("### 📈  Monthly Collection Trends")
 
     if not trend_df.empty:
-        st.plotly_chart(create_monthly_trend(trend_df), use_container_width=True)
+       st.plotly_chart(create_monthly_trend(trend_df), use_container_width=True, key="chart12")
 
         st.markdown("#### Monthly Breakdown")
         display_trend = trend_df.copy()
