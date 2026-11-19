@@ -1,8 +1,8 @@
 """
-╔══════════════════════════════════════════════════════╗
-║   CREDIT RECOVERY & BUSINESS INTELLIGENCE DASHBOARD   ║
-║   Executive-Level Analytics Management System         ║
-╚══════════════════════════════════════════════════════╝
+Credit Recovery & Business Intelligence Dashboard
+Executive-Level Analytics Management System
+All KPI cards use st.metric() - no HTML rendering issues
+All charts have unique keys - no duplicate element errors
 """
 
 import io
@@ -36,9 +36,9 @@ from visualizations import (
 from reports import export_excel, export_pdf
 
 
-# ──────────────────────────────────────────────
+# ==============================================
 #  PAGE CONFIG
-# ──────────────────────────────────────────────
+# ==============================================
 st.set_page_config(
     page_title="Credit Recovery Dashboard",
     page_icon="📊",
@@ -46,52 +46,49 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Apply custom CSS
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
-# ──────────────────────────────────────────────
-#  SESSION STATE INITIALISATION
-# ──────────────────────────────────────────────
+# ==============================================
+#  SESSION STATE
+# ==============================================
 for key, default in [
     ("processed_df", None),
     ("raw_df", None),
     ("column_mapping", None),
     ("data_uploaded", False),
-    ("use_sample", False),
 ]:
     if key not in st.session_state:
         st.session_state[key] = default
 
 
-# ──────────────────────────────────────────────
+# ==============================================
 #  HEADER
-# ──────────────────────────────────────────────
+# ==============================================
 st.markdown("""
 <div class="main-header">
-    <h1>📊  Credit Recovery &amp; Business Intelligence Dashboard</h1>
-    <p>Executive-Level Analytics Management System &nbsp;|&nbsp; Data-Driven Decision Making</p>
+    <h1>📊 Credit Recovery &amp; Business Intelligence Dashboard</h1>
+    <p>Executive-Level Analytics Management System | Data-Driven Decision Making</p>
 </div>
 """, unsafe_allow_html=True)
 
 
-# ══════════════════════════════════════════════
-#  SIDEBAR — Upload & Filters
-# ══════════════════════════════════════════════
+# ==============================================
+#  SIDEBAR
+# ==============================================
 with st.sidebar:
-    st.markdown("### 📁  Data Source")
+    st.markdown("### 📁 Data Source")
 
     uploaded_file = st.file_uploader(
         "Upload Excel File",
         type=["xlsx", "xls", "csv"],
-        help="Upload your credit recovery Excel file. "
-             "The system will auto-detect columns and validate data.",
+        help="Upload your credit recovery Excel file.",
     )
 
     st.divider()
+    st.markdown("### 🧪 Demo Mode")
 
-    st.markdown("### 🧪  Demo Mode")
-    if st.button("▶ Load Sample Data (for testing)", use_container_width=True):
+    if st.button("▶ Load Sample Data", use_container_width=True):
         sample = generate_sample_data(200)
         st.session_state["raw_df"] = sample
         st.session_state["column_mapping"] = {
@@ -111,79 +108,72 @@ with st.sidebar:
         }
         st.session_state["processed_df"] = process_data(sample, st.session_state["column_mapping"])
         st.session_state["data_uploaded"] = True
-        st.session_state["use_sample"] = True
         st.rerun()
 
     st.divider()
 
-    # ── Filters (only when data is loaded) ──
-    if st.session_state["processed_df"] is not None:
-        st.markdown("### 🔍  Filters")
-        df = st.session_state["processed_df"]
+    filter_collector = "All"
+    filter_model = "All"
+    filter_region = "All"
+    filter_status = "All"
+    filter_date = None
 
-        filter_collector = "All"
-        filter_model = "All"
-        filter_region = "All"
-        filter_status = "All"
-        filter_date = None
+    if st.session_state["processed_df"] is not None:
+        st.markdown("### 🔍 Filters")
+        df = st.session_state["processed_df"]
 
         if "collector_name" in df.columns:
             opts = ["All"] + sorted(df["collector_name"].dropna().unique().tolist())
-            filter_collector = st.selectbox("Collector", opts)
+            filter_collector = st.selectbox("Collector", opts, key="f_col")
 
         if "vehicle_model" in df.columns:
             opts = ["All"] + sorted(df["vehicle_model"].dropna().unique().tolist())
-            filter_model = st.selectbox("Vehicle Model", opts)
+            filter_model = st.selectbox("Vehicle Model", opts, key="f_model")
 
         if "region" in df.columns:
             opts = ["All"] + sorted(df["region"].dropna().unique().tolist())
-            filter_region = st.selectbox("Region", opts)
+            filter_region = st.selectbox("Region", opts, key="f_region")
 
         if "status" in df.columns:
             opts = ["All"] + sorted(df["status"].dropna().unique().tolist())
-            filter_status = st.selectbox("Status", opts)
+            filter_status = st.selectbox("Status", opts, key="f_status")
 
         if "due_date" in df.columns and df["due_date"].notna().any():
             valid_dates = df["due_date"].dropna()
-            min_d, max_d = valid_dates.min().date(), valid_dates.max().date()
+            min_d = valid_dates.min().date()
+            max_d = valid_dates.max().date()
             filter_date = st.date_input(
-                "Date Range (Due Date)",
+                "Date Range",
                 value=(min_d, max_d),
                 min_value=min_d,
                 max_value=max_d,
+                key="f_date",
             )
 
         st.divider()
-        st.markdown("### ℹ️  About")
-        st.caption(
-            "This dashboard processes your Excel credit recovery data "
-            "with full accuracy validation. All figures are computed "
-            "directly from source – no estimates."
-        )
-        st.caption(f"📅  {datetime.now().strftime('%d %b %Y')}")
+        st.caption(f"📅 {datetime.now().strftime('%d %b %Y')}")
 
 
-# ══════════════════════════════════════════════
-#  FILE UPLOAD PROCESSING
-# ══════════════════════════════════════════════
+# ==============================================
+#  PROCESS UPLOADED FILE
+# ==============================================
 if uploaded_file is not None and not st.session_state["data_uploaded"]:
     try:
-        with st.spinner("🔄  Reading Excel file …"):
+        with st.spinner("Reading Excel file..."):
             sheets = read_excel_file(uploaded_file)
 
         if not sheets:
-            st.error("❌ The uploaded file contains no readable data sheets.")
+            st.error("No readable data sheets found.")
             st.stop()
 
-        # ── Sheet selection ──
         if len(sheets) > 1:
             best = detect_best_sheet(sheets)
-            st.info(f"📁  Found {len(sheets)} sheet(s). "
-                    f"Auto-selected: **{best}**")
+            st.info(f"Found {len(sheets)} sheets. Auto-selected: **{best}**")
             sheet_name = st.selectbox(
-                "Choose the sheet with credit recovery data:",
+                "Choose sheet:",
                 list(sheets.keys()),
                 index=list(sheets.keys()).index(best),
+                key="sheet_select",
             )
         else:
             sheet_name = list(sheets.keys())[0]
@@ -191,141 +181,107 @@ if uploaded_file is not None and not st.session_state["data_uploaded"]:
         raw_df = sheets[sheet_name]
         st.session_state["raw_df"] = raw_df
 
-        # ── Column mapping ──
+        # Show raw headers
+        with st.expander("🔍 Raw Excel Headers", expanded=False):
+            st.write("**Column names detected:**")
+            for i, col in enumerate(raw_df.columns):
+                st.write(f"  {i+1}. `{col}`")
+            st.write(f"\n**Total rows:** {len(raw_df)}")
+            st.dataframe(raw_df.head(3), use_container_width=True)
+
         mapping = map_columns(raw_df)
         st.session_state["column_mapping"] = mapping
 
-        # ── Show mapping ──
-        with st.expander("🔍  Column Auto-Mapping Results", expanded=True):
+        # Show mapping
+        with st.expander("🔍 Column Auto-Mapping Results", expanded=True):
             if mapping:
                 map_df = pd.DataFrame([
-                    {"Detected Field": k, "Excel Column": v}
+                    {"Field": k, "Excel Column": v}
                     for k, v in mapping.items()
                 ])
                 st.dataframe(map_df, use_container_width=True, hide_index=True)
             else:
-                st.warning("⚠️  No columns could be auto-mapped. "
-                           "Please check your Excel headers.")
+                st.error("No columns could be auto-mapped. Check your Excel headers.")
                 st.stop()
 
-        # ── Validation ──
+        # Validation
         errors, warnings = validate_data(raw_df, mapping)
 
         if errors:
-            st.error("**Data Validation Errors:**")
+            st.error("**Validation Errors:**")
             for e in errors:
                 st.markdown(f"- {e}")
             st.stop()
 
         if warnings:
-            with st.expander("⚠️  Data Quality Warnings", expanded=True):
+            with st.expander("⚠️ Data Quality Warnings", expanded=True):
                 for w in warnings:
                     st.markdown(f"- {w}")
 
-        # ── Process ──
-        with st.spinner("⚙️  Processing data …"):
+        # Process
+        with st.spinner("Processing data..."):
             processed = process_data(raw_df, mapping)
 
         st.session_state["processed_df"] = processed
         st.session_state["data_uploaded"] = True
 
-        # ── Quality report ──
-        quality = data_quality_report(raw_df, processed, mapping)
-        with st.expander("✅  Data Quality Report", expanded=True):
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Source Rows", format_number(quality["total_rows_source"]))
-            c2.metric("Clean Rows", format_number(quality["total_rows_cleaned"]))
-            c3.metric("Duplicates Removed", format_number(quality["duplicates_removed"]))
-
-        st.success("✅  Data processed successfully! View the dashboard below.")
+        st.success(f"Processed {len(processed)} records successfully!")
         st.rerun()
 
     except Exception as exc:
-        st.error(f"❌  Error processing file: {exc}")
+        st.error(f"Error: {exc}")
         st.stop()
 
 
-# ══════════════════════════════════════════════
-#  NO DATA — Show upload prompt
-# ══════════════════════════════════════════════
+# ==============================================
+#  NO DATA STATE
+# ==============================================
 if st.session_state["processed_df"] is None:
     st.markdown("""
     <div style="text-align:center; padding:60px 20px;">
         <h2 style="color:#1B2A4A;">Welcome to the Credit Recovery Dashboard</h2>
         <p style="color:#718096; font-size:16px; max-width:600px; margin:20px auto;">
             Upload your Excel file from the sidebar or click
-            <b>"Load Sample Data"</b> to explore the dashboard with demo data.
+            <b>"Load Sample Data"</b> to explore the dashboard.
         </p>
     </div>
     """, unsafe_allow_html=True)
 
-    # Feature overview
     c1, c2, c3 = st.columns(3)
     with c1:
-        st.markdown("""
-        #### 🎯  Data Accuracy
-        - Intelligent column auto-mapping
-        - Full validation & cleaning
-        - No fabricated figures
-        - Source data verification
-        """)
+        st.markdown("#### 🎯 Data Accuracy\n- Auto column mapping\n- Full validation\n- No fabricated figures")
     with c2:
-        st.markdown("""
-        #### 📊  Executive Analytics
-        - KPI dashboards
-        - Overdue analysis
-        - Customer risk scoring
-        - Collector rankings
-        """)
+        st.markdown("#### 📊 Executive Analytics\n- KPI dashboards\n- Overdue analysis\n- Risk scoring")
     with c3:
-        st.markdown("""
-        #### 📄  Reporting
-        - Multi-sheet Excel export
-        - Professional PDF reports
-        - Dynamic filtering
-        - Consistent figures
-        """)
+        st.markdown("#### 📄 Reporting\n- Excel export\n- PDF export\n- Dynamic filtering")
     st.stop()
 
 
-# ══════════════════════════════════════════════
+# ==============================================
 #  APPLY FILTERS
-# ══════════════════════════════════════════════
+# ==============================================
 df = st.session_state["processed_df"].copy()
 
-# Collector
 if filter_collector != "All" and "collector_name" in df.columns:
     df = df[df["collector_name"] == filter_collector]
-
-# Vehicle Model
 if filter_model != "All" and "vehicle_model" in df.columns:
     df = df[df["vehicle_model"] == filter_model]
-
-# Region
 if filter_region != "All" and "region" in df.columns:
     df = df[df["region"] == filter_region]
-
-# Status
 if filter_status != "All" and "status" in df.columns:
     df = df[df["status"] == filter_status]
-
-# Date Range
 if filter_date and len(filter_date) == 2 and "due_date" in df.columns:
     start, end = filter_date
-    df = df[
-        (df["due_date"] >= pd.Timestamp(start)) &
-        (df["due_date"] <= pd.Timestamp(end))
-    ]
+    df = df[(df["due_date"] >= pd.Timestamp(start)) & (df["due_date"] <= pd.Timestamp(end))]
 
 if df.empty:
-    st.warning("⚠️  No records match the current filters. "
-               "Please adjust filter criteria.")
+    st.warning("No records match the current filters.")
     st.stop()
 
 
-# ══════════════════════════════════════════════
+# ==============================================
 #  COMPUTE ANALYTICS
-# ══════════════════════════════════════════════
+# ==============================================
 kpis = calculate_kpis(df)
 overdue_df = get_overdue_analysis(df)
 collector_df = get_collector_performance(df)
@@ -333,146 +289,173 @@ vehicle_df = get_vehicle_analysis(df)
 risk_df = get_customer_risk(df)
 trend_df = get_monthly_trends(df)
 high_risk_df = get_high_risk_customers(df, top_n=20)
-verify_df = verify_calculations(df)
 
 
-# ══════════════════════════════════════════════
-#  MAIN DASHBOARD TABS
-# ══════════════════════════════════════════════
+# ==============================================
+#  TABS
+# ==============================================
 tabs = st.tabs([
-    "🏠  Executive Dashboard",
-    "⏰  Overdue Analysis",
-    "👥  Customer Risk",
-    "🏆  Collector Performance",
-    "🚗  Vehicle Model Analysis",
-    "📈  Monthly Trends",
-    "📋  Source Data & Verification",
-    "📤  Reports & Export",
+    "🏠 Dashboard",
+    "⏰ Overdue Analysis",
+    "👥 Customer Risk",
+    "🏆 Collector Performance",
+    "🚗 Vehicle Model",
+    "📈 Monthly Trends",
+    "📋 Source Data",
+    "📤 Export",
 ])
 
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 #  TAB 1: Executive Dashboard
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 with tabs[0]:
-    st.markdown(render_kpi_cards(kpis), unsafe_allow_html=True)
-    st.markdown(render_kpi_cards_secondary(kpis), unsafe_allow_html=True)
 
+    # KPI Row 1 - using st.metric (no HTML issues)
+    k1, k2, k3, k4 = st.columns(4)
+    with k1:
+        st.metric("Total Outstanding",
+                  format_currency(kpis.get("total_outstanding", 0)),
+                  f"{format_number(kpis.get('total_records', 0))} accounts")
+    with k2:
+        st.metric("Total Collection",
+                  format_currency(kpis.get("total_collection", 0)),
+                  f"Efficiency: {kpis.get('collection_efficiency', 0):.1f}%")
+    with k3:
+        st.metric("Total Overdue",
+                  format_currency(kpis.get("total_overdue", 0)),
+                  f"{kpis.get('overdue_pct', 0):.1f}% of total")
+    with k4:
+        st.metric("Collection Efficiency",
+                  f"{kpis.get('collection_efficiency', 0):.1f}%",
+                  f"Avg overdue: {kpis.get('avg_overdue_days', 0):.0f} days")
+
+    st.divider()
+
+    # KPI Row 2
+    k5, k6, k7, k8 = st.columns(4)
+    with k5:
+        st.metric("Total Portfolio",
+                  format_currency(kpis.get("total_amount", 0)),
+                  f"{format_number(kpis.get('unique_customers', 0))} customers")
+    with k6:
+        st.metric("Unique Vehicles",
+                  format_number(kpis.get("unique_vehicles", 0)),
+                  "Models tracked")
+    with k7:
+        st.metric("Active Collectors",
+                  format_number(kpis.get("unique_collectors", 0)),
+                  "In selection")
+    with k8:
+        st.metric("High Risk Accounts",
+                  format_number(kpis.get("critical_count", 0) + kpis.get("high_risk_count", 0)),
+                  f"Critical: {kpis.get('critical_count', 0)}")
+
+    st.divider()
+
+    # Charts Row 1
     c1, c2 = st.columns(2)
     with c1:
-        st.plotly_chart(create_overdue_pie(overdue_df), use_container_width=True, key="chart1")
+        st.plotly_chart(create_overdue_pie(overdue_df), use_container_width=True, key="tab1_pie")
     with c2:
-        st.plotly_chart(create_risk_distribution(risk_df), use_container_width=True, key="chart2")
+        st.plotly_chart(create_risk_distribution(risk_df), use_container_width=True, key="tab1_risk")
 
-    st.markdown('<div class="section-title">Regional Overview</div>', unsafe_allow_html=True)
+    # Region
     if "region" in df.columns:
-        st.plotly_chart(create_region_chart(df), use_container_width=True, key="chart3")
+        st.plotly_chart(create_region_chart(df), use_container_width=True, key="tab1_region")
 
-    # Top tables
+    # Tables
     c3, c4 = st.columns(2)
     with c3:
-        st.markdown("#### 🏆  Top 5 Collectors")
+        st.markdown("#### 🏆 Top 5 Collectors")
         if not collector_df.empty:
             st.dataframe(
-                collector_df.head(5)[
-                    ["rank", "collector_name", "total_collection",
-                     "collection_efficiency", "accounts_handled"]
-                ],
-                use_container_width=True, hide_index=True,
-            )
+                collector_df.head(5)[["rank", "collector_name", "total_collection",
+                                      "collection_efficiency", "accounts_handled"]],
+                use_container_width=True, hide_index=True)
     with c4:
-        st.markdown("#### 🚨  Top 5 Risk Customers")
+        st.markdown("#### 🚨 Top 5 Risk Customers")
         if not high_risk_df.empty:
             st.dataframe(
-                high_risk_df.head(5)[
-                    ["customer_name", "risk_score", "risk_label",
-                     "outstanding", "overdue", "collection_efficiency"]
-                ],
-                use_container_width=True, hide_index=True,
-            )
+                high_risk_df.head(5)[["customer_name", "risk_score", "risk_label",
+                                      "outstanding", "overdue", "collection_efficiency"]],
+                use_container_width=True, hide_index=True)
 
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 #  TAB 2: Overdue Analysis
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 with tabs[1]:
-    st.markdown("### ⏰  Overdue Analysis by Ageing Bucket")
+    st.markdown("### ⏰ Overdue Analysis by Ageing Bucket")
 
     if not overdue_df.empty:
         c1, c2 = st.columns(2)
         with c1:
-             st.plotly_chart(create_overdue_pie(overdue_df), use_container_width=True, key="chart4")
+            st.plotly_chart(create_overdue_pie(overdue_df), use_container_width=True, key="tab2_pie")
         with c2:
-           st.plotly_chart(create_overdue_bar(overdue_df), use_container_width=True, key="chart5")
+            st.plotly_chart(create_overdue_bar(overdue_df), use_container_width=True, key="tab2_bar")
 
-        st.markdown("#### Detailed Overdue Table")
+        st.markdown("#### Detailed Table")
         display = overdue_df.copy()
         for col in ("total_outstanding", "total_overdue", "total_collection"):
             if col in display.columns:
                 display[col] = display[col].apply(format_currency)
         st.dataframe(display, use_container_width=True, hide_index=True)
 
-        # Summary
-        st.markdown("#### Summary")
         total_overdue = overdue_df["total_overdue"].sum()
         total_records = overdue_df["count"].sum()
-        c3, c4, c5 = st.columns(3)
-        c3.metric("Total Overdue", format_currency(total_overdue))
-        c4.metric("Accounts in Overdue", format_number(total_records))
-        c5.metric("Avg Overdue per Account",
-                  format_currency(total_overdue / max(total_records, 1)))
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Total Overdue", format_currency(total_overdue))
+        m2.metric("Accounts", format_number(total_records))
+        m3.metric("Avg per Account", format_currency(total_overdue / max(total_records, 1)))
     else:
         st.info("No overdue data available.")
 
 
-# ──────────────────────────────────────────────
-#  TAB 3: Customer Risk Analysis
-# ──────────────────────────────────────────────
+# ----------------------------------------------
+#  TAB 3: Customer Risk
+# ----------------------------------------------
 with tabs[2]:
-    st.markdown("### 👥  Customer-wise Credit Risk Analysis")
+    st.markdown("### 👥 Customer Credit Risk Analysis")
 
     if not risk_df.empty:
         c1, c2 = st.columns(2)
         with c1:
-            st.plotly_chart(create_risk_distribution(risk_df), use_container_width=True, key="chart6")
+            st.plotly_chart(create_risk_distribution(risk_df), use_container_width=True, key="tab3_dist")
         with c2:
-            st.plotly_chart(create_risk_scatter(risk_df), use_container_width=True, key="chart7")
+            st.plotly_chart(create_risk_scatter(risk_df), use_container_width=True, key="tab3_scatter")
 
-        st.markdown("#### 🔴  High-Risk Customers (Top 20)")
+        st.markdown("#### 🔴 High-Risk Customers (Top 20)")
         if not high_risk_df.empty:
             display_risk = high_risk_df.copy()
             for col in ("total_amount", "collection", "outstanding", "overdue"):
                 if col in display_risk.columns:
                     display_risk[col] = display_risk[col].apply(format_currency)
-            st.dataframe(
-                display_risk,
-                use_container_width=True, hide_index=True,
-            )
+            st.dataframe(display_risk, use_container_width=True, hide_index=True)
 
-        # Risk summary
         st.markdown("#### Risk Summary")
         rc = risk_df["risk_label"].value_counts()
-        c3, c4, c5, c6 = st.columns(4)
-        c3.metric("🔴 Critical", int(rc.get("🔴 Critical", 0)))
-        c4.metric("🟠 High", int(rc.get("🟠 High", 0)))
-        c5.metric("🟡 Medium", int(rc.get("🟡 Medium", 0)))
-        c6.metric("🟢 Low", int(rc.get("🟢 Low", 0)))
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Critical", int(rc.get("Critical", 0)))
+        r2.metric("High", int(rc.get("High", 0)))
+        r3.metric("Medium", int(rc.get("Medium", 0)))
+        r4.metric("Low", int(rc.get("Low", 0)))
     else:
         st.info("No customer data available.")
 
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 #  TAB 4: Collector Performance
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 with tabs[3]:
-    st.markdown("### 🏆  Collector-wise Collection Performance & Ranking")
+    st.markdown("### 🏆 Collector Performance & Ranking")
 
     if not collector_df.empty:
         c1, c2 = st.columns(2)
         with c1:
-            st.plotly_chart(create_collector_chart(collector_df), use_container_width=True, key="chart8")
+            st.plotly_chart(create_collector_chart(collector_df), use_container_width=True, key="tab4_chart")
         with c2:
-            st.plotly_chart(create_collector_efficiency_gauge(collector_df), use_container_width=True, key="chart9")
+            st.plotly_chart(create_collector_efficiency_gauge(collector_df), use_container_width=True, key="tab4_gauge")
 
         st.markdown("#### Performance Table")
         display_col = collector_df.copy()
@@ -481,30 +464,29 @@ with tabs[3]:
                 display_col[col] = display_col[col].apply(format_currency)
         st.dataframe(display_col, use_container_width=True, hide_index=True)
 
-        # Top performer highlight
+        st.markdown("#### 🌟 Top Performer")
         top = collector_df.iloc[0]
-        st.markdown("#### 🌟  Top Performer")
-        c3, c4, c5, c6 = st.columns(4)
-        c3.metric("Collector", top["collector_name"])
-        c4.metric("Collection", format_currency(top["total_collection"]))
-        c5.metric("Efficiency", f"{top['collection_efficiency']:.1f}%")
-        c6.metric("Accounts", format_number(top["accounts_handled"]))
+        t1, t2, t3, t4 = st.columns(4)
+        t1.metric("Collector", top["collector_name"])
+        t2.metric("Collection", format_currency(top["total_collection"]))
+        t3.metric("Efficiency", f"{top['collection_efficiency']:.1f}%")
+        t4.metric("Accounts", format_number(top["accounts_handled"]))
     else:
         st.info("No collector data available.")
 
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 #  TAB 5: Vehicle Model Analysis
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 with tabs[4]:
-    st.markdown("### 🚗  Vehicle Model-wise Outstanding vs Collection")
+    st.markdown("### 🚗 Vehicle Model Analysis")
 
     if not vehicle_df.empty:
         c1, c2 = st.columns(2)
         with c1:
-            st.plotly_chart(create_vehicle_chart(vehicle_df), use_container_width=True, key="chart10")
+            st.plotly_chart(create_vehicle_chart(vehicle_df), use_container_width=True, key="tab5_chart")
         with c2:
-            st.plotly_chart(create_vehicle_pie(vehicle_df), use_container_width=True, key="chart11")
+            st.plotly_chart(create_vehicle_pie(vehicle_df), use_container_width=True, key="tab5_pie")
 
         st.markdown("#### Vehicle Model Table")
         display_veh = vehicle_df.copy()
@@ -516,14 +498,14 @@ with tabs[4]:
         st.info("No vehicle data available.")
 
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 #  TAB 6: Monthly Trends
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 with tabs[5]:
-    st.markdown("### 📈  Monthly Collection Trends")
+    st.markdown("### 📈 Monthly Collection Trends")
 
     if not trend_df.empty:
-        st.plotly_chart(create_monthly_trend(trend_df), use_container_width=True, key="chart12")
+        st.plotly_chart(create_monthly_trend(trend_df), use_container_width=True, key="tab6_trend")
 
         st.markdown("#### Monthly Breakdown")
         display_trend = trend_df.copy()
@@ -532,43 +514,33 @@ with tabs[5]:
                 display_trend[col] = display_trend[col].apply(format_currency)
         st.dataframe(display_trend, use_container_width=True, hide_index=True)
     else:
-        st.info("No date-based data available for trend analysis. "
-                "Ensure your Excel has date columns (Due Date / Collection Date).")
+        st.info("No date data available for trends.")
 
 
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 #  TAB 7: Source Data & Verification
-# ──────────────────────────────────────────────
+# ----------------------------------------------
 with tabs[6]:
-    st.markdown("### 📋  Source Data & Calculation Verification")
-    st.caption(
-        "This tab shows the processed source data and verifies that "
-        "all dashboard calculations match the source. "
-        "This ensures 100% data accuracy."
-    )
+    st.markdown("### 📋 Source Data & Verification")
 
-    # ── Data Quality ──
-    st.markdown("#### Data Quality Summary")
+    st.markdown("#### Data Quality")
     quality = data_quality_report(
         st.session_state["raw_df"],
         st.session_state["processed_df"],
         st.session_state["column_mapping"],
     )
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Source Rows", format_number(quality["total_rows_source"]))
-    c2.metric("Clean Rows", format_number(quality["total_rows_cleaned"]))
-    c3.metric("Duplicates Removed", format_number(quality["duplicates_removed"]))
-    c4.metric("Columns Mapped", format_number(quality["columns_mapped"]))
+    q1, q2, q3, q4 = st.columns(4)
+    q1.metric("Source Rows", format_number(quality["total_rows_source"]))
+    q2.metric("Clean Rows", format_number(quality["total_rows_cleaned"]))
+    q3.metric("Duplicates Removed", format_number(quality["duplicates_removed"]))
+    q4.metric("Columns Mapped", format_number(quality["columns_mapped"]))
 
-    # ── Calculation Verification ──
-    st.markdown("#### ✅  Calculation Verification")
-    verify_df_check = verify_calculations(df)
-    verify_display = pd.DataFrame(verify_df_check)
-    if not verify_display.empty:
-        st.dataframe(verify_display, use_container_width=True, hide_index=True)
+    st.markdown("#### ✅ Calculation Verification")
+    verify_data = verify_calculations(df)
+    if verify_data:
+        st.dataframe(pd.DataFrame(verify_data), use_container_width=True, hide_index=True)
 
-    # ── Column Mapping ──
-    st.markdown("#### 🔍  Column Mapping")
+    st.markdown("#### 🔍 Column Mapping")
     if st.session_state["column_mapping"]:
         map_display = pd.DataFrame([
             {"Field": k, "Excel Column": v}
@@ -576,84 +548,61 @@ with tabs[6]:
         ])
         st.dataframe(map_display, use_container_width=True, hide_index=True)
 
-    # ── Raw/Processed Data ──
-    st.markdown("#### 📊  Processed Data (Filtered)")
+    st.markdown("#### 📊 Processed Data")
     st.dataframe(df, use_container_width=True, height=400)
 
-    st.markdown("#### 📊  Source Data (Raw Excel)")
-    st.dataframe(
-        st.session_state["raw_df"],
-        use_container_width=True, height=400,
-    )
+    st.markdown("#### 📊 Raw Source Data")
+    st.dataframe(st.session_state["raw_df"], use_container_width=True, height=400)
 
 
-# ──────────────────────────────────────────────
-#  TAB 8: Reports & Export
-# ──────────────────────────────────────────────
+# ----------------------------------------------
+#  TAB 8: Export
+# ----------------------------------------------
 with tabs[7]:
-    st.markdown("### 📤  Reports & Export")
+    st.markdown("### 📤 Reports & Export")
 
     c1, c2 = st.columns(2)
 
     with c1:
-        st.markdown("#### 📊  Excel Report")
-        st.caption(
-            "Multi-sheet Excel workbook with Executive Summary, "
-            "Source Data, Overdue Analysis, Collector Performance, "
-            "Vehicle Analysis, Customer Risk & Monthly Trends."
-        )
-        if st.button("📥  Download Excel Report", use_container_width=True, type="primary"):
-            with st.spinner("Generating Excel report …"):
-                excel_buffer = export_excel(
-                    df, kpis, overdue_df, collector_df,
-                    vehicle_df, risk_df, trend_df,
-                )
+        st.markdown("#### 📊 Excel Report")
+        if st.button("📥 Download Excel", use_container_width=True, type="primary"):
+            with st.spinner("Generating..."):
+                excel_buffer = export_excel(df, kpis, overdue_df, collector_df,
+                                            vehicle_df, risk_df, trend_df)
             st.download_button(
-                label="⬇️  Click to Download .xlsx",
+                label="⬇️ Download .xlsx",
                 data=excel_buffer,
-                file_name=f"Credit_Recovery_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                file_name=f"Credit_Report_{datetime.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
+                use_container_width=True)
 
     with c2:
-        st.markdown("#### 📄  PDF Report")
-        st.caption(
-            "Professional PDF summary with Executive Summary, "
-            "Overdue Analysis, Collector Performance & Vehicle Analysis."
-        )
-        if st.button("📥  Download PDF Report", use_container_width=True, type="primary"):
-            with st.spinner("Generating PDF report …"):
-                pdf_buffer = export_pdf(
-                    df, kpis, overdue_df, collector_df, vehicle_df,
-                )
+        st.markdown("#### 📄 PDF Report")
+        if st.button("📥 Download PDF", use_container_width=True, type="primary"):
+            with st.spinner("Generating..."):
+                pdf_buffer = export_pdf(df, kpis, overdue_df, collector_df, vehicle_df)
             st.download_button(
-                label="⬇️  Click to Download .pdf",
+                label="⬇️ Download .pdf",
                 data=pdf_buffer,
-                file_name=f"Credit_Recovery_Report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+                file_name=f"Credit_Report_{datetime.now().strftime('%Y%m%d')}.pdf",
                 mime="application/pdf",
-                use_container_width=True,
-            )
+                use_container_width=True)
 
-    # ── Quick Stats ──
-    st.markdown("#### 📋  Quick Report Summary")
+    st.markdown("#### 📋 Quick Summary")
     st.info(
-        f"**Current filter selection includes:**\n\n"
-        f"- **{format_number(len(df))}** records\n"
-        f"- **Total Outstanding:** {format_currency(kpis.get('total_outstanding', 0))}\n"
-        f"- **Total Collection:** {format_currency(kpis.get('total_collection', 0))}\n"
-        f"- **Collection Efficiency:** {kpis.get('collection_efficiency', 0):.2f}%\n\n"
-        f"All figures above are computed directly from your uploaded source data."
+        f"**{format_number(len(df))}** records loaded\n\n"
+        f"- Outstanding: {format_currency(kpis.get('total_outstanding', 0))}\n"
+        f"- Collection: {format_currency(kpis.get('total_collection', 0))}\n"
+        f"- Efficiency: {kpis.get('collection_efficiency', 0):.2f}%"
     )
 
 
-# ══════════════════════════════════════════════
+# ==============================================
 #  FOOTER
-# ══════════════════════════════════════════════
+# ==============================================
 st.markdown("""
 <div class="footer">
-    📊  Credit Recovery &amp; Business Intelligence Dashboard &nbsp;|&nbsp;
-    Data Accuracy First, Executive Design Second &nbsp;|&nbsp;
-    © 2024 &nbsp;|&nbsp; All figures computed from source data – no estimates
+    📊 Credit Recovery &amp; Business Intelligence Dashboard |
+    Data Accuracy First, Executive Design Second | © 2024
 </div>
 """, unsafe_allow_html=True)
