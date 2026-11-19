@@ -352,7 +352,7 @@ def generate_sample_data(n: int = 200) -> pd.DataFrame:
         collection = np.random.randint(0, int(total * 0.95))
         outstanding = total - collection
         overdue = np.random.randint(0, outstanding + 1) if outstanding > 0 else 0
-        od_days = np.random.choice([0, 15, 30, 45, 60, 90, 120, 180, 240], n=1)[0]
+        od_days = int(np.random.choice([0, 15, 30, 45, 60, 90, 120, 180, 240]))
 
         rows.append({
             "customer_id": f"CR-{i:05d}",
