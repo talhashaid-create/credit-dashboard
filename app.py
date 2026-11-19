@@ -523,7 +523,7 @@ with tabs[5]:
     st.markdown("### 📈  Monthly Collection Trends")
 
     if not trend_df.empty:
-       st.plotly_chart(create_monthly_trend(trend_df), use_container_width=True, key="chart12")
+        st.plotly_chart(create_monthly_trend(trend_df), use_container_width=True, key="chart12")
 
         st.markdown("#### Monthly Breakdown")
         display_trend = trend_df.copy()
